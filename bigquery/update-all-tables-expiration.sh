@@ -20,8 +20,10 @@ do
  esac
 done
 
-SECONDS_EXPIRY=("${DAYS}" * 3600 * 24)
+SECONDS_EXPIRY=$((DAYS * 60 * 60 * 24))
 TABLES=($(bq ls -n 100000000 "${PROJECT}:${DATASET}."| awk '{print $1}' | tail +3))
 FULL_TABLES=$(printf "${DATASET}.%s\n" "${TABLES[@]}")
 
+echo "Seconds to expiry: ${SECONDS_EXPIRY}"
+echo "Updating tables in ${PROJECT}.${DATASET}..."
 echo "${FULL_TABLES}" | xargs -n1 bq update --expiration ${SECONDS_EXPIRY}
