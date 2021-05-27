@@ -8,7 +8,7 @@ Entity ID [-i]
   exit 1;
 fi
 
-while getopts t:f:e:u:i: option
+while getopts t:i:f: option
 do
  case "${option}"
  in
@@ -25,27 +25,28 @@ DEST_DATASET='pandata_raw_pandora'
 DEST_TABLE_PREFIX="backend__production__${TABLE}__full__"
 DEST_TABLE="${DEST_TABLE_PREFIX}${ENTITY_ID_LOWER}"
 
+DEST_TABLE_INC_PREFIX="backend__production__${TABLE}__inc__"
+DEST_TABLE_INC="${DEST_TABLE_INC_PREFIX}${ENTITY_ID_LOWER}"
+
 SOURCE_TABLE_PREFIX="ml_be_"
 SOURCE_TABLE="${SOURCE_TABLE_PREFIX}${TABLE}"
 SOURCE_DATASET="dl_pandora"
 
+
+echo "Using schema from fulfillment-dwh-production:${DEST_DATASET}.${DEST_TABLE_INC}..."
+echo ""
+
+SCHEMA_FIELDS=$(bq show --format=json "fulfillment-dwh-production:${DEST_DATASET}.${DEST_TABLE_INC}" | jq '.schema.fields[].name' | tr -d '"')
+
+SCHEMA_FIELDS=$(echo "${SCHEMA_FIELDS}" | tr '\n' ',')
 
 echo "Project ID: ${PROJECT}"
 echo "Source table: ${SOURCE_DATASET}.${SOURCE_TABLE}"
 echo "Destination table: ${DEST_DATASET}.${DEST_TABLE}"
 echo ""
 
-QUERY="SELECT * EXCEPT (
-rdbms_id,
-dwh_last_modified,
-dwh_row_hash,
-timezone,
-global_entity_id,
-created_date,
-merge_layer_run_from,
-merge_layer_created_at,
-merge_layer_updated_at
-)
+QUERY="SELECT
+${SCHEMA_FIELDS}
 FROM ${PROJECT}.${SOURCE_DATASET}.${SOURCE_TABLE}
 WHERE global_entity_id = '${ENTITY_ID}'"
 
