@@ -62,4 +62,5 @@ bq query \
   --batch \
   --use_legacy_sql=false \
   --destination_table "${PROJECT}:${DEST_DATASET}.${DEST_TABLE}" \
+  -sync=false \
   "${QUERY}"
