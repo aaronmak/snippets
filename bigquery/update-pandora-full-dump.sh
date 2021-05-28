@@ -47,6 +47,14 @@ echo "Source table: ${SOURCE_DATASET}.${SOURCE_TABLE}"
 echo "Destination table: ${DEST_DATASET}.${DEST_TABLE}"
 echo ""
 
+if [[ "${TABLE}" =~ ^(menus|schedules|specialdays)$ ]]; then
+  SCHEMA_FIELDS=${SCHEMA_FIELDS/start_hour/'TIMESTAMP("1970-01-01 " || IF(start_hour = "24:00:00", "00:00:00", start_hour)) AS start_hour'}
+  SCHEMA_FIELDS=${SCHEMA_FIELDS/stop_hour/'TIMESTAMP("1970-01-01 " || IF(stop_hour = "24:00:00", "23:59:59", stop_hour)) AS stop_hour'}
+elif [[ "${TABLE}" -eq "discount_schedule" ]]; then
+  SCHEMA_FIELDS=${SCHEMA_FIELDS/start_time/'TIMESTAMP("1970-01-01 " || IF(start_time = "24:00:00", "00:00:00", start_time)) AS start_time'}
+  SCHEMA_FIELDS=${SCHEMA_FIELDS/end_time/'TIMESTAMP("1970-01-01 " || IF(end_time = "24:00:00", "00:00:00", end_time)) AS end_time'}
+fi
+
 QUERY="SELECT
 ${SCHEMA_FIELDS}
 FROM ${PROJECT}.${SOURCE_DATASET}.${SOURCE_TABLE}
