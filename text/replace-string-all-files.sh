@@ -22,4 +22,4 @@ done
 
 echo  "s/${OLD_STRING}/${NEW_STRING}/"
 
-rg "${OLD_STRING}" "${DIR}" -l | xargs sed -i '' "s/${OLD_STRING}/${NEW_STRING}/"
+rg "${OLD_STRING}" "${DIR}" -l | xargs sed -i '' "s/${OLD_STRING}/${NEW_STRING}/g"
