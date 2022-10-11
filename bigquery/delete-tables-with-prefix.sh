@@ -4,27 +4,25 @@ if [ -z "$*" ];
   then printf "
 Project ID     [-p]
 Dataset ID     [-d]
-Table prefix   [-t]
+Regex search   [-r]
   ";
   exit 1;
 fi
 
-while getopts p:d:t: option
+while getopts p:d:r: option
 do
  case "${option}"
  in
  p) PROJECT=${OPTARG};;
  d) DATASET=${OPTARG};;
- t) TABLE=${OPTARG};;
+ r) PATTERN=${OPTARG};;
  *) exit 1;;
  esac
 done
 
-# TABLES=($(bq ls --max_results=10000000  "${PROJECT}:${DATASET}." | grep TABLE | grep "${TABLE}" | awk '{print $1}'))
 TABLES=($(bq ls --max_results=10000000  --project_id="${PROJECT}" --dataset_id="${DATASET}" |
-  grep TABLE |
-  grep "${TABLE}" |
-  awk '{print $1}'
+  awk '{print $1}' |
+  grep "${PATTERN}"
 ))
 
 FULL_TABLES=$(printf "${DATASET}.%s\n" "${TABLES[@]}")
