@@ -20,8 +20,8 @@ do
  esac
 done
 
-TABLES=($(bq ls --max_results=10000000  --project_id="${PROJECT}" --dataset_id="${DATASET}" |
-  awk '{print $1}' |
+TABLES=($(bq ls --max_results=10000000  --project_id="${PROJECT}" --dataset_id="${DATASET}" --format=json |
+  jq --raw-output '.[].tableReference.tableId' |
   grep "${PATTERN}"
 ))
 
