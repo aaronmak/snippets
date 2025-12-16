@@ -1,0 +1,57 @@
+# Activity Report Generator - Example Configuration
+#
+# This file defines team members for generating activity reports.
+# Copy this file to config.yaml and update with your team's information.
+#
+# =============================================================================
+# SETUP INSTRUCTIONS
+# =============================================================================
+#
+# 1. Create an Atlassian OAuth 2.0 app:
+#    - Go to https://developer.atlassian.com/console/myapps/
+#    - Click "Create" -> "OAuth 2.0 integration"
+#    - Set callback URL to: http://localhost:8089/callback
+#    - Enable the following scopes:
+#      * read:jira-work
+#      * read:jira-user
+#      * search:jira
+#      * read:confluence-content.all
+#      * read:confluence-user
+#      * read:confluence-space.summary
+#      * read:me
+#      * offline_access
+#    - Copy the Client ID and Client Secret
+#
+# 2. Create a GitHub personal access token:
+#    - Go to https://github.com/settings/tokens
+#    - Create a token with 'repo' and 'read:org' scopes
+#
+# 3. Set environment variables:
+#    export ATLASSIAN_CLIENT_ID="your-oauth-client-id"
+#    export ATLASSIAN_CLIENT_SECRET="your-oauth-client-secret"
+#    export GITHUB_TOKEN="ghp_your_github_token"
+#
+# 4. Authorize with Atlassian (one-time setup):
+#    uv run activity_report.py --auth
+#
+# 5. Generate reports:
+#    uv run activity_report.py -c config.yaml -s 2024-01-01 -e 2024-01-31
+#
+# =============================================================================
+
+team:
+  - name: "John Doe"
+    jira_username: "jdoe" # Jira account ID or email
+    confluence_username: "jdoe" # Confluence account ID or email
+    github_username: "johndoe"
+
+  - name: "Jane Smith"
+    jira_username: "jsmith"
+    confluence_username: "jsmith"
+    github_username: "janesmith"
+
+  # Add more team members as needed:
+  # - name: "Team Member"
+  #   jira_username: "username"
+  #   confluence_username: "username"
+  #   github_username: "ghuser"
