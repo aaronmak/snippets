@@ -23,7 +23,7 @@ import json
 import webbrowser
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Optional
@@ -1022,7 +1022,7 @@ HTML_TEMPLATE = """
                 <canvas id="distributionChart"></canvas>
             </div>
             <div class="chart-container">
-                <h3>GitHub Activity</h3>
+                <h3>GitHub Activity by Week</h3>
                 <canvas id="githubChart"></canvas>
             </div>
         </div>
@@ -1223,27 +1223,44 @@ HTML_TEMPLATE = """
             }
         });
 
-        // GitHub Activity Chart
+        // GitHub Activity Chart (Weekly)
         const ghCtx = document.getElementById('githubChart').getContext('2d');
         new Chart(ghCtx, {
-            type: 'bar',
+            type: 'line',
             data: {
-                labels: ['PRs Opened', 'PRs Merged', 'Reviews'],
-                datasets: [{
-                    label: 'Count',
-                    data: [
-                        {{ github.prs_opened | length }},
-                        {{ github.prs_merged | length }},
-                        {{ github.reviews | length }}
-                    ],
-                    backgroundColor: ['#0366d6', '#28a745', '#6f42c1']
-                }]
+                labels: {{ week_labels | tojson }},
+                datasets: [
+                    {
+                        label: 'PRs Opened',
+                        data: {{ prs_opened_by_week | tojson }},
+                        borderColor: '#0366d6',
+                        backgroundColor: 'rgba(3, 102, 214, 0.1)',
+                        tension: 0.1,
+                        fill: false
+                    },
+                    {
+                        label: 'PRs Merged',
+                        data: {{ prs_merged_by_week | tojson }},
+                        borderColor: '#28a745',
+                        backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                        tension: 0.1,
+                        fill: false
+                    },
+                    {
+                        label: 'Reviews',
+                        data: {{ reviews_by_week | tojson }},
+                        borderColor: '#6f42c1',
+                        backgroundColor: 'rgba(111, 66, 193, 0.1)',
+                        tension: 0.1,
+                        fill: false
+                    }
+                ]
             },
             options: {
                 responsive: true,
                 plugins: {
                     legend: {
-                        display: false
+                        position: 'bottom'
                     }
                 },
                 scales: {
@@ -1267,9 +1284,76 @@ HTML_TEMPLATE = """
 # =============================================================================
 
 
+def get_week_labels(start_date: str, end_date: str) -> list[str]:
+    """Generate list of week labels (Mondays) between start and end dates."""
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    # Find the Monday of the week containing start_date
+    start_monday = start - timedelta(days=start.weekday())
+
+    weeks = []
+    current = start_monday
+    while current <= end:
+        weeks.append(current.strftime("%b %d"))
+        current += timedelta(days=7)
+
+    return weeks
+
+
+def aggregate_by_week(
+    items: list[dict], date_field: str, start_date: str, end_date: str
+) -> list[int]:
+    """Aggregate items by week, returning counts for each week in the date range."""
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    # Find the Monday of the week containing start_date
+    start_monday = start - timedelta(days=start.weekday())
+
+    # Build list of week start dates
+    week_starts = []
+    current = start_monday
+    while current <= end:
+        week_starts.append(current)
+        current += timedelta(days=7)
+
+    # Count items per week
+    counts = [0] * len(week_starts)
+    for item in items:
+        date_str = item.get(date_field, "")
+        if not date_str:
+            continue
+        try:
+            item_date = datetime.strptime(date_str[:10], "%Y-%m-%d")
+            # Find which week this belongs to
+            for i, week_start in enumerate(week_starts):
+                week_end = week_start + timedelta(days=6)
+                if week_start <= item_date <= week_end:
+                    counts[i] += 1
+                    break
+        except ValueError:
+            continue
+
+    return counts
+
+
 def generate_report(report: PersonReport, output_dir: str) -> str:
     """Generate HTML report for a person."""
     template = Template(HTML_TEMPLATE)
+
+    # Compute weekly GitHub activity data for chart
+    start_date, end_date = report.date_range
+    week_labels = get_week_labels(start_date, end_date)
+    prs_opened_by_week = aggregate_by_week(
+        report.github.prs_opened, "created_at", start_date, end_date
+    )
+    prs_merged_by_week = aggregate_by_week(
+        report.github.prs_merged, "merged_at", start_date, end_date
+    )
+    reviews_by_week = aggregate_by_week(
+        report.github.reviews, "created_at", start_date, end_date
+    )
 
     html = template.render(
         name=report.name,
@@ -1279,6 +1363,10 @@ def generate_report(report: PersonReport, output_dir: str) -> str:
         jira=report.jira,
         confluence=report.confluence,
         github=report.github,
+        week_labels=week_labels,
+        prs_opened_by_week=prs_opened_by_week,
+        prs_merged_by_week=prs_merged_by_week,
+        reviews_by_week=reviews_by_week,
     )
 
     # Create filename
