@@ -300,6 +300,7 @@ class AtlassianOAuth:
 @dataclass
 class JiraMetrics:
     issues_assigned: list[dict] = field(default_factory=list)
+    issues_resolved: list[dict] = field(default_factory=list)
     comments_made: list[dict] = field(default_factory=list)
 
 
@@ -440,7 +441,9 @@ class JiraClient(AtlassianClient):
         # Fall back to using the username as-is (might be an account ID already)
         return username
 
-    def search_issues(self, jql: str, fields: list[str] | None = None) -> list[dict]:
+    def search_issues(
+        self, jql: str, fields: list[str] | None = None, expand_changelog: bool = False
+    ) -> list[dict]:
         """Search issues using JQL via the /rest/api/3/search/jql endpoint."""
         if fields is None:
             fields = [
@@ -480,7 +483,26 @@ class JiraClient(AtlassianClient):
             if not next_page_token:
                 break
 
+        # Fetch changelog for each issue if requested
+        if expand_changelog:
+            for issue in all_issues:
+                issue_key = issue.get("key")
+                if issue_key:
+                    changelog = self._get_issue_changelog(issue_key)
+                    issue["changelog"] = changelog
+
         return all_issues
+
+    def _get_issue_changelog(self, issue_key: str) -> dict:
+        """Fetch changelog for a specific issue."""
+        try:
+            resp = self._request(
+                "GET",
+                f"/rest/api/3/issue/{issue_key}/changelog",
+            )
+            return {"histories": resp.get("values", [])}
+        except Exception:
+            return {"histories": []}
 
     def get_issues_assigned(
         self, username: str, start_date: str, end_date: str
@@ -490,7 +512,26 @@ class JiraClient(AtlassianClient):
         jql = f'assignee = "{account_id}" AND created >= "{
             start_date
         }" AND created <= "{end_date}" AND status NOT IN ("Cancelled", "Dismissed")'
-        issues = self.search_issues(jql)
+        issues = self.search_issues(jql, expand_changelog=True)
+        return [self._format_issue(i) for i in issues]
+
+    def _get_two_years_ago(self) -> str:
+        """Get date string for 2 years ago."""
+        two_years_ago = datetime.now().replace(year=datetime.now().year - 2)
+        return two_years_ago.strftime("%Y-%m-%d")
+
+    def get_issues_resolved(
+        self, username: str, start_date: str, end_date: str
+    ) -> list[dict]:
+        """Get issues resolved/closed by user in date range."""
+        account_id = self.get_account_id(username)
+        # Fetch issues that were resolved in the date range
+        # Add created date bound to satisfy JIRA's unbounded query restriction
+        two_years_ago = self._get_two_years_ago()
+        jql = f'assignee = "{account_id}" AND resolved >= "{
+            start_date
+        }" AND resolved <= "{end_date}" AND created >= "{two_years_ago}"'
+        issues = self.search_issues(jql, expand_changelog=True)
         return [self._format_issue(i) for i in issues]
 
     def get_comments_made(
@@ -539,11 +580,43 @@ class JiraClient(AtlassianClient):
         extract(adf)
         return " ".join(texts)
 
+    def _get_status_change_date(
+        self, issue: dict, target_statuses: list[str]
+    ) -> Optional[str]:
+        """Extract the date when issue status changed to one of the target statuses.
+
+        Searches the changelog for the most recent transition to Closed, Resolved, or Done.
+        Returns the date in YYYY-MM-DD format, or None if not found.
+        """
+        changelog = issue.get("changelog", {})
+        histories = changelog.get("histories", [])
+
+        # Search from most recent to oldest
+        for history in reversed(histories):
+            for item in history.get("items", []):
+                if item.get("field") == "status":
+                    to_status = item.get("toString", "")
+                    if to_status in target_statuses:
+                        # Return the date of this change
+                        created = history.get("created", "")
+                        return created[:10] if created else None
+
+        return None
+
     def _format_issue(self, issue: dict) -> dict:
         """Format issue for display."""
         fields = issue.get("fields", {})
         story_points = fields.get("customfield_10053")
         description = self._extract_text_from_adf(fields.get("description"))
+
+        # Get resolved date: prefer the resolved field, fall back to changelog
+        resolved = fields.get("resolved", "")[:10] if fields.get("resolved") else ""
+        if not resolved:
+            # Try to get the date from changelog when status changed to Closed/Resolved/Done
+            resolved = self._get_status_change_date(
+                issue, ["Closed", "Resolved", "Done"]
+            ) or ""
+
         return {
             "key": issue.get("key"),
             "summary": fields.get("summary", ""),
@@ -551,9 +624,7 @@ class JiraClient(AtlassianClient):
             "status": fields.get("status", {}).get("name", ""),
             "type": fields.get("issuetype", {}).get("name", ""),
             "created": fields.get("created", "")[:10] if fields.get("created") else "",
-            "resolved": fields.get("resolved", "")[:10]
-            if fields.get("resolved")
-            else "",
+            "resolved": resolved,
             "story_points": int(story_points) if story_points is not None else None,
             "url": f"{self.site_url}/browse/{issue.get('key')}",
         }
@@ -1110,6 +1181,7 @@ HTML_TEMPLATE = """
                         <th>Status</th>
                         <th>Story Points</th>
                         <th>Created</th>
+                        <th>Resolved</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1121,6 +1193,7 @@ HTML_TEMPLATE = """
                         <td><span class="badge badge-info">{{ issue.status }}</span></td>
                         <td>{{ issue.story_points if issue.story_points is not none else '-' }}</td>
                         <td>{{ issue.created }}</td>
+                        <td>{{ issue.resolved if issue.resolved else '-' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -1276,7 +1349,7 @@ HTML_TEMPLATE = """
                 reviews: {{ github.reviews | tojson }}
             },
             jira: {
-                issues_assigned: {{ jira.issues_assigned | tojson }}
+                issues_resolved: {{ jira.issues_resolved | tojson }}
             }
         };
 
@@ -1536,7 +1609,7 @@ HTML_TEMPLATE = """
                 const table = h4.nextElementSibling;
                 if (table && table.tagName === 'TABLE') {
                     const visibleRows = table.querySelectorAll('tbody tr[data-date]:not([style*="display: none"])').length;
-                    h4.textContent = h4.textContent.replace(/\(\d+\)/, `(${visibleRows})`);
+                    h4.textContent = h4.textContent.replace(/\\(\\d+\\)/, `(${visibleRows})`);
                 }
             });
 
@@ -1565,7 +1638,7 @@ HTML_TEMPLATE = """
             githubChart.update();
 
             // Update JIRA chart
-            const filteredJiraIssues = reportData.jira.issues_assigned.filter(issue => isDateInRange(issue.resolved, startDate, endDate));
+            const filteredJiraIssues = reportData.jira.issues_resolved.filter(issue => isDateInRange(issue.resolved, startDate, endDate));
             const jiraWeekly = aggregateJiraByWeek(filteredJiraIssues, startDate, endDate);
             jiraChart.data.labels = newLabels;
             jiraChart.data.datasets[0].data = jiraWeekly.ticketCounts;
@@ -1706,7 +1779,7 @@ def generate_report(report: PersonReport, output_dir: str) -> str:
 
     # JIRA weekly data (tickets closed and story points)
     jira_tickets_by_week, jira_points_by_week = aggregate_jira_by_week(
-        report.jira.issues_assigned, start_date, end_date
+        report.jira.issues_resolved, start_date, end_date
     )
 
     html = template.render(
@@ -1744,9 +1817,9 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
     start, end = report.date_range
     csv_files = []
 
-    # Jira issues CSV
+    # Jira issues assigned CSV
     if report.jira.issues_assigned:
-        jira_filename = f"{safe_name}_jira_issues_{start}_{end}.csv"
+        jira_filename = f"{safe_name}_jira_issues_assigned_{start}_{end}.csv"
         jira_filepath = os.path.join(output_dir, jira_filename)
         with open(jira_filepath, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
@@ -1766,6 +1839,29 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
             writer.writeheader()
             writer.writerows(report.jira.issues_assigned)
         csv_files.append(jira_filepath)
+
+    # Jira issues resolved CSV
+    if report.jira.issues_resolved:
+        jira_resolved_filename = f"{safe_name}_jira_issues_resolved_{start}_{end}.csv"
+        jira_resolved_filepath = os.path.join(output_dir, jira_resolved_filename)
+        with open(jira_resolved_filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "key",
+                    "summary",
+                    "description",
+                    "type",
+                    "status",
+                    "story_points",
+                    "created",
+                    "resolved",
+                    "url",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(report.jira.issues_resolved)
+        csv_files.append(jira_resolved_filepath)
 
     # Confluence pages CSV (created + edited combined)
     confluence_pages = []
@@ -2015,6 +2111,9 @@ def main(
             try:
                 print(f"  Fetching Jira data for {jira_user}...", file=sys.stderr)
                 report.jira.issues_assigned = jira_client.get_issues_assigned(
+                    jira_user, start, end
+                )
+                report.jira.issues_resolved = jira_client.get_issues_resolved(
                     jira_user, start, end
                 )
                 report.jira.comments_made = jira_client.get_comments_made(
