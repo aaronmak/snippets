@@ -19,14 +19,14 @@ Generate HTML activity reports summarizing Jira and GitHub activity for team mem
 
 ### 1. Create Atlassian OAuth 2.0 App
 
-1. Go to https://developer.atlassian.com/console/myapps/
+1. Go to <https://developer.atlassian.com/console/myapps/>
 2. Create OAuth 2.0 integration
 3. Set callback URL: `http://localhost:8089/callback`
 4. Enable scopes: `read:jira-work`, `read:jira-user`, `search:jira`, `read:me`, `offline_access`
 
 ### 2. Create GitHub Token
 
-1. Go to https://github.com/settings/tokens
+1. Go to <https://github.com/settings/tokens>
 2. Create token with `repo` and `read:org` scopes
 
 ### 3. Set Environment Variables
@@ -83,6 +83,6 @@ Reports are saved to the `output/` directory (or custom path via `-o`):
 ```yaml
 team:
   - name: "John Doe"
-    jira_username: "jdoe"        # Jira account ID or email
+    jira_username: "5d9fe6100d44fc0dca12312"        # Jira account ID or email
     github_username: "johndoe"   # GitHub username
 ```

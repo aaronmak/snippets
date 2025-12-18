@@ -15,9 +15,6 @@
 #      * read:jira-work
 #      * read:jira-user
 #      * search:jira
-#      * read:confluence-content.all
-#      * read:confluence-user
-#      * read:confluence-space.summary
 #      * read:me
 #      * offline_access
 #    - Copy the Client ID and Client Secret
@@ -27,15 +24,23 @@
 #    - Create a token with 'repo' and 'read:org' scopes
 #
 # 3. Set environment variables:
-#    export ATLASSIAN_CLIENT_ID="your-oauth-client-id"
-#    export ATLASSIAN_CLIENT_SECRET="your-oauth-client-secret"
-#    export GITHUB_TOKEN="ghp_your_github_token"
+#
+#    Required:
+#      export ATLASSIAN_CLIENT_ID="your-oauth-client-id"
+#      export ATLASSIAN_CLIENT_SECRET="your-oauth-client-secret"
+#      export GITHUB_TOKEN="ghp_your_github_token"
+#
+#    Optional:
+#      export ANTHROPIC_API_KEY="your-anthropic-key"  # For --ai-summary flag
 #
 # 4. Authorize with Atlassian (one-time setup):
 #    uv run activity_report.py --auth
 #
 # 5. Generate reports:
 #    uv run activity_report.py -c config.yaml -s 2024-01-01 -e 2024-01-31
+#
+#    With AI summaries:
+#    uv run activity_report.py -c config.yaml -s 2024-01-01 -e 2024-01-31 --ai-summary
 #
 # =============================================================================
 

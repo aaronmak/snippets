@@ -509,7 +509,9 @@ class JiraClient(AtlassianClient):
         account_id = self.get_account_id(username)
         jql = f'assignee = "{account_id}" AND created >= "{
             start_date
-        }" AND created <= "{end_date}" AND status NOT IN ("Cancelled", "Dismissed") AND issuetype != Epic'
+        }" AND created <= "{
+            end_date
+        }" AND status NOT IN ("Cancelled", "Dismissed") AND issuetype != Epic'
         issues = self.search_issues(jql, expand_changelog=True)
         return [self._format_issue(i) for i in issues]
 
@@ -528,7 +530,9 @@ class JiraClient(AtlassianClient):
         two_years_ago = self._get_two_years_ago()
         jql = f'assignee = "{account_id}" AND resolved >= "{
             start_date
-        }" AND resolved <= "{end_date}" AND created >= "{two_years_ago}" AND issuetype != Epic'
+        }" AND resolved <= "{end_date}" AND created >= "{
+            two_years_ago
+        }" AND issuetype != Epic'
         issues = self.search_issues(jql, expand_changelog=True)
         return [self._format_issue(i) for i in issues]
 
@@ -938,7 +942,7 @@ def generate_monthly_summary(
             messages=[
                 {
                     "role": "user",
-                    "content": f"""Based on the following activity data for {name} in {month_display}, write a concise professional summary (2-4 sentences) highlighting key accomplishments and focus areas. Focus on the impact and themes of the work, not just listing items.
+                    "content": f"""Based on the following activity data for {name} in {month_display}, write a concise professional summary (2-4 sentences) highlighting key accomplishments and focus areas. Focus on the impact and themes of the work, not just listing items. Do not use flowery language. Be succinct.
 
 {context}
 
