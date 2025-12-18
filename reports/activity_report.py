@@ -970,6 +970,60 @@ HTML_TEMPLATE = """
             text-align: center;
         }
 
+        .filter-section {
+            background: var(--bg-primary);
+            border-radius: 10px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .filter-section label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9em;
+        }
+
+        .filter-section input[type="date"] {
+            padding: 6px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .filter-section button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background 0.2s;
+        }
+
+        .filter-section button:first-of-type {
+            background: var(--accent-jira);
+            color: white;
+        }
+
+        .filter-section button:first-of-type:hover {
+            background: #0047b3;
+        }
+
+        .filter-section button:last-of-type {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .filter-section button:last-of-type:hover {
+            background: var(--border-color);
+        }
+
         @media (max-width: 768px) {
             .charts-section {
                 grid-template-columns: 1fr;
@@ -992,6 +1046,17 @@ HTML_TEMPLATE = """
             <div class="date-range">{{ start_date }} to {{ end_date }}</div>
             <div class="generated">Generated on {{ generated_at }}</div>
         </header>
+
+        <div class="filter-section">
+            <label>
+                From: <input type="date" id="filterStartDate" value="{{ start_date }}">
+            </label>
+            <label>
+                To: <input type="date" id="filterEndDate" value="{{ end_date }}">
+            </label>
+            <button onclick="applyFilter()">Apply Filter</button>
+            <button onclick="resetFilter()">Reset</button>
+        </div>
 
         <div class="summary-cards">
             <div class="card jira">
@@ -1045,7 +1110,7 @@ HTML_TEMPLATE = """
                 </thead>
                 <tbody>
                     {% for issue in jira.issues_assigned %}
-                    <tr>
+                    <tr data-date="{{ issue.created }}">
                         <td><a href="{{ issue.url }}" target="_blank">{{ issue.key }}</a></td>
                         <td>{{ issue.summary[:60] }}{% if issue.summary|length > 60 %}...{% endif %}</td>
                         <td>{{ issue.type }}</td>
@@ -1076,7 +1141,7 @@ HTML_TEMPLATE = """
                 </thead>
                 <tbody>
                     {% for page in confluence.pages_created %}
-                    <tr>
+                    <tr data-date="{{ page.last_modified }}">
                         <td><a href="{{ page.url }}" target="_blank">{{ page.title }}</a></td>
                         <td>{{ page.space }}</td>
                         <td>{{ page.last_modified }}</td>
@@ -1100,7 +1165,7 @@ HTML_TEMPLATE = """
                 </thead>
                 <tbody>
                     {% for page in confluence.pages_edited %}
-                    <tr>
+                    <tr data-date="{{ page.last_modified }}">
                         <td><a href="{{ page.url }}" target="_blank">{{ page.title }}</a></td>
                         <td>{{ page.space }}</td>
                         <td>{{ page.last_modified }}</td>
@@ -1129,7 +1194,7 @@ HTML_TEMPLATE = """
                 </thead>
                 <tbody>
                     {% for pr in github.prs_merged %}
-                    <tr>
+                    <tr data-date="{{ pr.merged_at or pr.created_at }}">
                         <td><a href="{{ pr.url }}" target="_blank">#{{ pr.number }}</a></td>
                         <td>{{ pr.title[:60] }}{% if pr.title|length > 60 %}...{% endif %}</td>
                         <td>{{ pr.repo }}</td>
@@ -1155,7 +1220,7 @@ HTML_TEMPLATE = """
                 </thead>
                 <tbody>
                     {% for pr in github.prs_opened %}
-                    <tr>
+                    <tr data-date="{{ pr.created_at }}">
                         <td><a href="{{ pr.url }}" target="_blank">#{{ pr.number }}</a></td>
                         <td>{{ pr.title[:60] }}{% if pr.title|length > 60 %}...{% endif %}</td>
                         <td>{{ pr.repo }}</td>
@@ -1181,7 +1246,7 @@ HTML_TEMPLATE = """
                 </thead>
                 <tbody>
                     {% for pr in github.reviews %}
-                    <tr>
+                    <tr data-date="{{ pr.created_at }}">
                         <td><a href="{{ pr.url }}" target="_blank">#{{ pr.number }}</a></td>
                         <td>{{ pr.title[:60] }}{% if pr.title|length > 60 %}...{% endif %}</td>
                         <td>{{ pr.repo }}</td>
@@ -1197,9 +1262,23 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // Store raw data for filtering
+        const reportData = {
+            originalStartDate: '{{ start_date }}',
+            originalEndDate: '{{ end_date }}',
+            github: {
+                prs_opened: {{ github.prs_opened | tojson }},
+                prs_merged: {{ github.prs_merged | tojson }},
+                reviews: {{ github.reviews | tojson }}
+            }
+        };
+
+        // Chart instances (for updates)
+        let distributionChart, githubChart;
+
         // Activity Distribution Chart
         const distCtx = document.getElementById('distributionChart').getContext('2d');
-        new Chart(distCtx, {
+        distributionChart = new Chart(distCtx, {
             type: 'doughnut',
             data: {
                 labels: ['Jira Issues', 'Confluence Pages', 'GitHub PRs', 'Code Reviews'],
@@ -1225,7 +1304,7 @@ HTML_TEMPLATE = """
 
         // GitHub Activity Chart (Weekly)
         const ghCtx = document.getElementById('githubChart').getContext('2d');
-        new Chart(ghCtx, {
+        githubChart = new Chart(ghCtx, {
             type: 'line',
             data: {
                 labels: {{ week_labels | tojson }},
@@ -1273,6 +1352,116 @@ HTML_TEMPLATE = """
                 }
             }
         });
+
+        // Filter functions
+        function isDateInRange(dateStr, startDate, endDate) {
+            if (!dateStr) return false;
+            const date = new Date(dateStr);
+            const start = new Date(startDate);
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            return date >= start && date <= end;
+        }
+
+        function getWeekLabels(startDate, endDate) {
+            const start = new Date(startDate);
+            const end = new Date(endDate);
+            const startMonday = new Date(start);
+            startMonday.setDate(start.getDate() - start.getDay() + (start.getDay() === 0 ? -6 : 1));
+
+            const weeks = [];
+            const current = new Date(startMonday);
+            while (current <= end) {
+                weeks.push(current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+                current.setDate(current.getDate() + 7);
+            }
+            return weeks;
+        }
+
+        function aggregateByWeek(items, dateField, startDate, endDate) {
+            const start = new Date(startDate);
+            const end = new Date(endDate);
+            const startMonday = new Date(start);
+            startMonday.setDate(start.getDate() - start.getDay() + (start.getDay() === 0 ? -6 : 1));
+
+            const weekStarts = [];
+            const current = new Date(startMonday);
+            while (current <= end) {
+                weekStarts.push(new Date(current));
+                current.setDate(current.getDate() + 7);
+            }
+
+            const counts = new Array(weekStarts.length).fill(0);
+            items.forEach(item => {
+                const dateStr = item[dateField];
+                if (!dateStr) return;
+                const itemDate = new Date(dateStr);
+                for (let i = 0; i < weekStarts.length; i++) {
+                    const weekEnd = new Date(weekStarts[i]);
+                    weekEnd.setDate(weekEnd.getDate() + 6);
+                    if (itemDate >= weekStarts[i] && itemDate <= weekEnd) {
+                        counts[i]++;
+                        break;
+                    }
+                }
+            });
+            return counts;
+        }
+
+        function applyFilter() {
+            const startDate = document.getElementById('filterStartDate').value;
+            const endDate = document.getElementById('filterEndDate').value;
+
+            if (!startDate || !endDate) {
+                alert('Please select both start and end dates');
+                return;
+            }
+
+            // Filter table rows
+            document.querySelectorAll('tr[data-date]').forEach(row => {
+                const rowDate = row.getAttribute('data-date');
+                row.style.display = isDateInRange(rowDate, startDate, endDate) ? '' : 'none';
+            });
+
+            // Update counts in headers
+            document.querySelectorAll('h4').forEach(h4 => {
+                const table = h4.nextElementSibling;
+                if (table && table.tagName === 'TABLE') {
+                    const visibleRows = table.querySelectorAll('tbody tr[data-date]:not([style*="display: none"])').length;
+                    h4.textContent = h4.textContent.replace(/\(\d+\)/, `(${visibleRows})`);
+                }
+            });
+
+            // Filter data for charts
+            const filteredPrsOpened = reportData.github.prs_opened.filter(pr => isDateInRange(pr.created_at, startDate, endDate));
+            const filteredPrsMerged = reportData.github.prs_merged.filter(pr => isDateInRange(pr.merged_at || pr.created_at, startDate, endDate));
+            const filteredReviews = reportData.github.reviews.filter(pr => isDateInRange(pr.created_at, startDate, endDate));
+
+            // Update distribution chart
+            const jiraVisible = document.querySelectorAll('section.details:nth-of-type(1) tr[data-date]:not([style*="display: none"])').length;
+            const confluenceVisible = document.querySelectorAll('section.details:nth-of-type(2) tr[data-date]:not([style*="display: none"])').length;
+            distributionChart.data.datasets[0].data = [
+                jiraVisible,
+                confluenceVisible,
+                filteredPrsOpened.length + filteredPrsMerged.length,
+                filteredReviews.length
+            ];
+            distributionChart.update();
+
+            // Update GitHub chart
+            const newLabels = getWeekLabels(startDate, endDate);
+            githubChart.data.labels = newLabels;
+            githubChart.data.datasets[0].data = aggregateByWeek(filteredPrsOpened, 'created_at', startDate, endDate);
+            githubChart.data.datasets[1].data = aggregateByWeek(filteredPrsMerged, 'merged_at', startDate, endDate);
+            githubChart.data.datasets[2].data = aggregateByWeek(filteredReviews, 'created_at', startDate, endDate);
+            githubChart.update();
+        }
+
+        function resetFilter() {
+            document.getElementById('filterStartDate').value = reportData.originalStartDate;
+            document.getElementById('filterEndDate').value = reportData.originalEndDate;
+            applyFilter();
+        }
     </script>
 </body>
 </html>
