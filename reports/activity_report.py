@@ -445,6 +445,7 @@ class JiraClient(AtlassianClient):
         if fields is None:
             fields = [
                 "summary",
+                "description",
                 "status",
                 "issuetype",
                 "created",
@@ -516,13 +517,37 @@ class JiraClient(AtlassianClient):
             # issueFunction might not be available, return empty
             return []
 
+    def _extract_text_from_adf(self, adf: dict | None) -> str:
+        """Extract plain text from Atlassian Document Format (ADF)."""
+        if not adf:
+            return ""
+        if isinstance(adf, str):
+            return adf
+
+        texts = []
+
+        def extract(node):
+            if isinstance(node, dict):
+                if node.get("type") == "text":
+                    texts.append(node.get("text", ""))
+                for child in node.get("content", []):
+                    extract(child)
+            elif isinstance(node, list):
+                for item in node:
+                    extract(item)
+
+        extract(adf)
+        return " ".join(texts)
+
     def _format_issue(self, issue: dict) -> dict:
         """Format issue for display."""
         fields = issue.get("fields", {})
         story_points = fields.get("customfield_10053")
+        description = self._extract_text_from_adf(fields.get("description"))
         return {
             "key": issue.get("key"),
             "summary": fields.get("summary", ""),
+            "description": description,
             "status": fields.get("status", {}).get("name", ""),
             "type": fields.get("issuetype", {}).get("name", ""),
             "created": fields.get("created", "")[:10] if fields.get("created") else "",
@@ -746,6 +771,7 @@ class GitHubClient:
         return {
             "number": pr.get("number"),
             "title": pr.get("title", ""),
+            "description": pr.get("body", "") or "",
             "state": pr.get("state", ""),
             "repo": repo_name,
             "created_at": pr.get("created_at", "")[:10] if pr.get("created_at") else "",
@@ -1284,6 +1310,7 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
                 fieldnames=[
                     "key",
                     "summary",
+                    "description",
                     "type",
                     "status",
                     "story_points",
@@ -1334,6 +1361,7 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
         github_activity.append({
             "number": pr.get("number"),
             "title": pr.get("title", ""),
+            "description": pr.get("description", ""),
             "activity_type": "pr_opened",
             "repo": pr.get("repo", ""),
             "date": pr.get("created_at", ""),
@@ -1343,6 +1371,7 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
         github_activity.append({
             "number": pr.get("number"),
             "title": pr.get("title", ""),
+            "description": pr.get("description", ""),
             "activity_type": "pr_merged",
             "repo": pr.get("repo", ""),
             "date": pr.get("merged_at") or pr.get("created_at", ""),
@@ -1352,6 +1381,7 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
         github_activity.append({
             "number": pr.get("number"),
             "title": pr.get("title", ""),
+            "description": pr.get("description", ""),
             "activity_type": "review",
             "repo": pr.get("repo", ""),
             "date": pr.get("created_at", ""),
@@ -1364,7 +1394,7 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
         with open(github_filepath, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["number", "title", "activity_type", "repo", "date", "url"],
+                fieldnames=["number", "title", "description", "activity_type", "repo", "date", "url"],
             )
             writer.writeheader()
             writer.writerows(github_activity)
