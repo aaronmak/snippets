@@ -1090,6 +1090,10 @@ HTML_TEMPLATE = """
                 <h3>GitHub Activity by Week</h3>
                 <canvas id="githubChart"></canvas>
             </div>
+            <div class="chart-container">
+                <h3>JIRA Activity by Week</h3>
+                <canvas id="jiraChart"></canvas>
+            </div>
         </div>
 
         <section class="details">
@@ -1270,11 +1274,14 @@ HTML_TEMPLATE = """
                 prs_opened: {{ github.prs_opened | tojson }},
                 prs_merged: {{ github.prs_merged | tojson }},
                 reviews: {{ github.reviews | tojson }}
+            },
+            jira: {
+                issues_assigned: {{ jira.issues_assigned | tojson }}
             }
         };
 
         // Chart instances (for updates)
-        let distributionChart, githubChart;
+        let distributionChart, githubChart, jiraChart;
 
         // Activity Distribution Chart
         const distCtx = document.getElementById('distributionChart').getContext('2d');
@@ -1353,6 +1360,71 @@ HTML_TEMPLATE = """
             }
         });
 
+        // JIRA Activity Chart (Weekly)
+        const jiraCtx = document.getElementById('jiraChart').getContext('2d');
+        jiraChart = new Chart(jiraCtx, {
+            type: 'line',
+            data: {
+                labels: {{ week_labels | tojson }},
+                datasets: [
+                    {
+                        label: 'Tickets Closed',
+                        data: {{ jira_tickets_by_week | tojson }},
+                        borderColor: '#0052cc',
+                        backgroundColor: 'rgba(0, 82, 204, 0.1)',
+                        tension: 0.1,
+                        fill: false,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Story Points',
+                        data: {{ jira_points_by_week | tojson }},
+                        borderColor: '#28a745',
+                        backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                        tension: 0.1,
+                        fill: false,
+                        yAxisID: 'y1'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                },
+                scales: {
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Tickets'
+                        },
+                        ticks: {
+                            stepSize: 1
+                        }
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Story Points'
+                        },
+                        grid: {
+                            drawOnChartArea: false
+                        }
+                    }
+                }
+            }
+        });
+
         // Filter functions
         function isDateInRange(dateStr, startDate, endDate) {
             if (!dateStr) return false;
@@ -1408,6 +1480,42 @@ HTML_TEMPLATE = """
             return counts;
         }
 
+        function aggregateJiraByWeek(issues, startDate, endDate) {
+            const start = new Date(startDate);
+            const end = new Date(endDate);
+            const startMonday = new Date(start);
+            startMonday.setDate(start.getDate() - start.getDay() + (start.getDay() === 0 ? -6 : 1));
+
+            const weekStarts = [];
+            const current = new Date(startMonday);
+            while (current <= end) {
+                weekStarts.push(new Date(current));
+                current.setDate(current.getDate() + 7);
+            }
+
+            const ticketCounts = new Array(weekStarts.length).fill(0);
+            const pointsSums = new Array(weekStarts.length).fill(0);
+
+            issues.forEach(issue => {
+                const resolvedStr = issue.resolved;
+                if (!resolvedStr) return;
+                const resolvedDate = new Date(resolvedStr);
+                for (let i = 0; i < weekStarts.length; i++) {
+                    const weekEnd = new Date(weekStarts[i]);
+                    weekEnd.setDate(weekEnd.getDate() + 6);
+                    if (resolvedDate >= weekStarts[i] && resolvedDate <= weekEnd) {
+                        ticketCounts[i]++;
+                        if (issue.story_points != null) {
+                            pointsSums[i] += issue.story_points;
+                        }
+                        break;
+                    }
+                }
+            });
+
+            return { ticketCounts, pointsSums };
+        }
+
         function applyFilter() {
             const startDate = document.getElementById('filterStartDate').value;
             const endDate = document.getElementById('filterEndDate').value;
@@ -1455,6 +1563,14 @@ HTML_TEMPLATE = """
             githubChart.data.datasets[1].data = aggregateByWeek(filteredPrsMerged, 'merged_at', startDate, endDate);
             githubChart.data.datasets[2].data = aggregateByWeek(filteredReviews, 'created_at', startDate, endDate);
             githubChart.update();
+
+            // Update JIRA chart
+            const filteredJiraIssues = reportData.jira.issues_assigned.filter(issue => isDateInRange(issue.resolved, startDate, endDate));
+            const jiraWeekly = aggregateJiraByWeek(filteredJiraIssues, startDate, endDate);
+            jiraChart.data.labels = newLabels;
+            jiraChart.data.datasets[0].data = jiraWeekly.ticketCounts;
+            jiraChart.data.datasets[1].data = jiraWeekly.pointsSums;
+            jiraChart.update();
         }
 
         function resetFilter() {
@@ -1527,13 +1643,57 @@ def aggregate_by_week(
     return counts
 
 
+def aggregate_jira_by_week(
+    issues: list[dict], start_date: str, end_date: str
+) -> tuple[list[int], list[int]]:
+    """Aggregate JIRA issues by resolved date, returning (ticket counts, story points) per week."""
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    # Find the Monday of the week containing start_date
+    start_monday = start - timedelta(days=start.weekday())
+
+    # Build list of week start dates
+    week_starts = []
+    current = start_monday
+    while current <= end:
+        week_starts.append(current)
+        current += timedelta(days=7)
+
+    # Count tickets and sum story points per week
+    ticket_counts = [0] * len(week_starts)
+    points_sums = [0] * len(week_starts)
+
+    for issue in issues:
+        resolved_str = issue.get("resolved", "")
+        if not resolved_str:
+            continue
+        try:
+            resolved_date = datetime.strptime(resolved_str[:10], "%Y-%m-%d")
+            # Find which week this belongs to
+            for i, week_start in enumerate(week_starts):
+                week_end = week_start + timedelta(days=6)
+                if week_start <= resolved_date <= week_end:
+                    ticket_counts[i] += 1
+                    points = issue.get("story_points")
+                    if points is not None:
+                        points_sums[i] += points
+                    break
+        except ValueError:
+            continue
+
+    return ticket_counts, points_sums
+
+
 def generate_report(report: PersonReport, output_dir: str) -> str:
     """Generate HTML report for a person."""
     template = Template(HTML_TEMPLATE)
 
-    # Compute weekly GitHub activity data for chart
+    # Compute weekly activity data for charts
     start_date, end_date = report.date_range
     week_labels = get_week_labels(start_date, end_date)
+
+    # GitHub weekly data
     prs_opened_by_week = aggregate_by_week(
         report.github.prs_opened, "created_at", start_date, end_date
     )
@@ -1542,6 +1702,11 @@ def generate_report(report: PersonReport, output_dir: str) -> str:
     )
     reviews_by_week = aggregate_by_week(
         report.github.reviews, "created_at", start_date, end_date
+    )
+
+    # JIRA weekly data (tickets closed and story points)
+    jira_tickets_by_week, jira_points_by_week = aggregate_jira_by_week(
+        report.jira.issues_assigned, start_date, end_date
     )
 
     html = template.render(
@@ -1556,6 +1721,8 @@ def generate_report(report: PersonReport, output_dir: str) -> str:
         prs_opened_by_week=prs_opened_by_week,
         prs_merged_by_week=prs_merged_by_week,
         reviews_by_week=reviews_by_week,
+        jira_tickets_by_week=jira_tickets_by_week,
+        jira_points_by_week=jira_points_by_week,
     )
 
     # Create filename
@@ -1623,47 +1790,55 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
             )
             writer.writeheader()
             for page in confluence_pages:
-                writer.writerow({
-                    "title": page.get("title", ""),
-                    "space": page.get("space", ""),
-                    "activity_type": page.get("activity_type", ""),
-                    "last_modified": page.get("last_modified", ""),
-                    "url": page.get("url", ""),
-                })
+                writer.writerow(
+                    {
+                        "title": page.get("title", ""),
+                        "space": page.get("space", ""),
+                        "activity_type": page.get("activity_type", ""),
+                        "last_modified": page.get("last_modified", ""),
+                        "url": page.get("url", ""),
+                    }
+                )
         csv_files.append(confluence_filepath)
 
     # GitHub activity CSV (PRs opened + merged + reviews combined)
     github_activity = []
     for pr in report.github.prs_opened:
-        github_activity.append({
-            "number": pr.get("number"),
-            "title": pr.get("title", ""),
-            "description": pr.get("description", ""),
-            "activity_type": "pr_opened",
-            "repo": pr.get("repo", ""),
-            "date": pr.get("created_at", ""),
-            "url": pr.get("url", ""),
-        })
+        github_activity.append(
+            {
+                "number": pr.get("number"),
+                "title": pr.get("title", ""),
+                "description": pr.get("description", ""),
+                "activity_type": "pr_opened",
+                "repo": pr.get("repo", ""),
+                "date": pr.get("created_at", ""),
+                "url": pr.get("url", ""),
+            }
+        )
     for pr in report.github.prs_merged:
-        github_activity.append({
-            "number": pr.get("number"),
-            "title": pr.get("title", ""),
-            "description": pr.get("description", ""),
-            "activity_type": "pr_merged",
-            "repo": pr.get("repo", ""),
-            "date": pr.get("merged_at") or pr.get("created_at", ""),
-            "url": pr.get("url", ""),
-        })
+        github_activity.append(
+            {
+                "number": pr.get("number"),
+                "title": pr.get("title", ""),
+                "description": pr.get("description", ""),
+                "activity_type": "pr_merged",
+                "repo": pr.get("repo", ""),
+                "date": pr.get("merged_at") or pr.get("created_at", ""),
+                "url": pr.get("url", ""),
+            }
+        )
     for pr in report.github.reviews:
-        github_activity.append({
-            "number": pr.get("number"),
-            "title": pr.get("title", ""),
-            "description": pr.get("description", ""),
-            "activity_type": "review",
-            "repo": pr.get("repo", ""),
-            "date": pr.get("created_at", ""),
-            "url": pr.get("url", ""),
-        })
+        github_activity.append(
+            {
+                "number": pr.get("number"),
+                "title": pr.get("title", ""),
+                "description": pr.get("description", ""),
+                "activity_type": "review",
+                "repo": pr.get("repo", ""),
+                "date": pr.get("created_at", ""),
+                "url": pr.get("url", ""),
+            }
+        )
 
     if github_activity:
         github_filename = f"{safe_name}_github_activity_{start}_{end}.csv"
@@ -1671,7 +1846,15 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
         with open(github_filepath, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["number", "title", "description", "activity_type", "repo", "date", "url"],
+                fieldnames=[
+                    "number",
+                    "title",
+                    "description",
+                    "activity_type",
+                    "repo",
+                    "date",
+                    "url",
+                ],
             )
             writer.writeheader()
             writer.writerows(github_activity)
