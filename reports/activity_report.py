@@ -20,7 +20,6 @@ import sys
 import time
 import json
 import webbrowser
-import threading
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,7 +27,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlencode, parse_qs, urlparse
-import base64
 
 import click
 import requests
@@ -441,7 +439,7 @@ class JiraClient(AtlassianClient):
         # Fall back to using the username as-is (might be an account ID already)
         return username
 
-    def search_issues(self, jql: str, fields: list[str] = None) -> list[dict]:
+    def search_issues(self, jql: str, fields: list[str] | None = None) -> list[dict]:
         """Search issues using JQL via the /rest/api/3/search/jql endpoint."""
         if fields is None:
             fields = [
@@ -452,6 +450,7 @@ class JiraClient(AtlassianClient):
                 "resolved",
                 "assignee",
                 "project",
+                "customfield_10053",  # Story points
             ]
 
         all_issues = []
@@ -488,7 +487,7 @@ class JiraClient(AtlassianClient):
         account_id = self.get_account_id(username)
         jql = f'assignee = "{account_id}" AND created >= "{
             start_date
-        }" AND created <= "{end_date}"'
+        }" AND created <= "{end_date}" AND status NOT IN ("Cancelled", "Dismissed")'
         issues = self.search_issues(jql)
         return [self._format_issue(i) for i in issues]
 
@@ -519,6 +518,7 @@ class JiraClient(AtlassianClient):
     def _format_issue(self, issue: dict) -> dict:
         """Format issue for display."""
         fields = issue.get("fields", {})
+        story_points = fields.get("customfield_10053")
         return {
             "key": issue.get("key"),
             "summary": fields.get("summary", ""),
@@ -528,6 +528,7 @@ class JiraClient(AtlassianClient):
             "resolved": fields.get("resolved", "")[:10]
             if fields.get("resolved")
             else "",
+            "story_points": int(story_points) if story_points is not None else None,
             "url": f"{self.site_url}/browse/{issue.get('key')}",
         }
 
@@ -1011,6 +1012,7 @@ HTML_TEMPLATE = """
                         <th>Summary</th>
                         <th>Type</th>
                         <th>Status</th>
+                        <th>Story Points</th>
                         <th>Created</th>
                     </tr>
                 </thead>
@@ -1021,6 +1023,7 @@ HTML_TEMPLATE = """
                         <td>{{ issue.summary[:60] }}{% if issue.summary|length > 60 %}...{% endif %}</td>
                         <td>{{ issue.type }}</td>
                         <td><span class="badge badge-info">{{ issue.status }}</span></td>
+                        <td>{{ issue.story_points if issue.story_points is not none else '-' }}</td>
                         <td>{{ issue.created }}</td>
                     </tr>
                     {% endfor %}
