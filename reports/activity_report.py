@@ -1391,10 +1391,6 @@ HTML_TEMPLATE = """
 
         <div class="charts-section">
             <div class="chart-container">
-                <h3>Activity Distribution</h3>
-                <canvas id="distributionChart"></canvas>
-            </div>
-            <div class="chart-container">
                 <h3>GitHub Activity by Week</h3>
                 <canvas id="githubChart"></canvas>
             </div>
@@ -1591,33 +1587,7 @@ HTML_TEMPLATE = """
         };
 
         // Chart instances (for updates)
-        let distributionChart, githubChart, jiraChart;
-
-        // Activity Distribution Chart
-        const distCtx = document.getElementById('distributionChart').getContext('2d');
-        distributionChart = new Chart(distCtx, {
-            type: 'doughnut',
-            data: {
-                labels: ['Jira Issues', 'Confluence Pages', 'GitHub PRs', 'Code Reviews'],
-                datasets: [{
-                    data: [
-                        {{ jira.issues_assigned | length }},
-                        {{ (confluence.pages_created | length) + (confluence.pages_edited | length) }},
-                        {{ (github.prs_opened | length) + (github.prs_merged | length) }},
-                        {{ github.reviews | length }}
-                    ],
-                    backgroundColor: ['#0052cc', '#1868db', '#24292f', '#6f42c1']
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: {
-                        position: 'bottom'
-                    }
-                }
-            }
-        });
+        let githubChart, jiraChart;
 
         // GitHub Activity Chart (Weekly)
         const ghCtx = document.getElementById('githubChart').getContext('2d');
@@ -1854,17 +1824,6 @@ HTML_TEMPLATE = """
             const filteredPrsOpened = reportData.github.prs_opened.filter(pr => isDateInRange(pr.created_at, startDate, endDate));
             const filteredPrsMerged = reportData.github.prs_merged.filter(pr => isDateInRange(pr.merged_at || pr.created_at, startDate, endDate));
             const filteredReviews = reportData.github.reviews.filter(pr => isDateInRange(pr.created_at, startDate, endDate));
-
-            // Update distribution chart
-            const jiraVisible = document.querySelectorAll('section.details:nth-of-type(1) tr[data-date]:not([style*="display: none"])').length;
-            const confluenceVisible = document.querySelectorAll('section.details:nth-of-type(2) tr[data-date]:not([style*="display: none"])').length;
-            distributionChart.data.datasets[0].data = [
-                jiraVisible,
-                confluenceVisible,
-                filteredPrsOpened.length + filteredPrsMerged.length,
-                filteredReviews.length
-            ];
-            distributionChart.update();
 
             // Update GitHub chart
             const newLabels = getWeekLabels(startDate, endDate);
