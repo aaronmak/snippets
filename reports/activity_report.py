@@ -1328,15 +1328,15 @@ HTML_TEMPLATE = """
 
         <div class="summary-cards">
             <div class="card jira">
-                <div class="metric">{{ jira.issues_assigned | length }}</div>
+                <div class="metric" id="metricJiraAssigned">{{ jira.issues_assigned | length }}</div>
                 <div class="label">Jira Issues Assigned</div>
             </div>
             <div class="card github">
-                <div class="metric">{{ github.prs_merged | length }}</div>
+                <div class="metric" id="metricPrsMerged">{{ github.prs_merged | length }}</div>
                 <div class="label">PRs Merged</div>
             </div>
             <div class="card github">
-                <div class="metric">{{ github.reviews | length }}</div>
+                <div class="metric" id="metricReviews">{{ github.reviews | length }}</div>
                 <div class="label">Code Reviews</div>
             </div>
         </div>
@@ -1494,6 +1494,7 @@ HTML_TEMPLATE = """
                 reviews: {{ github.reviews | tojson }}
             },
             jira: {
+                issues_assigned: {{ jira.issues_assigned | tojson }},
                 issues_resolved: {{ jira.issues_resolved | tojson }}
             }
         };
@@ -1732,10 +1733,18 @@ HTML_TEMPLATE = """
                 }
             });
 
+            // Filter data for summary cards
+            const filteredJiraAssigned = reportData.jira.issues_assigned.filter(issue => isDateInRange(issue.created, startDate, endDate));
+            document.getElementById('metricJiraAssigned').textContent = filteredJiraAssigned.length;
+
             // Filter data for charts
             const filteredPrsOpened = reportData.github.prs_opened.filter(pr => isDateInRange(pr.created_at, startDate, endDate));
             const filteredPrsMerged = reportData.github.prs_merged.filter(pr => isDateInRange(pr.merged_at || pr.created_at, startDate, endDate));
             const filteredReviews = reportData.github.reviews.filter(pr => isDateInRange(pr.created_at, startDate, endDate));
+
+            // Update summary card metrics
+            document.getElementById('metricPrsMerged').textContent = filteredPrsMerged.length;
+            document.getElementById('metricReviews').textContent = filteredReviews.length;
 
             // Update GitHub chart
             const newLabels = getWeekLabels(startDate, endDate);
