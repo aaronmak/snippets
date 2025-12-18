@@ -6,6 +6,7 @@
 #     "pyyaml>=6.0",
 #     "jinja2>=3.1.0",
 #     "click>=8.1.0",
+#     "anthropic>=0.40.0",
 # ]
 # ///
 """
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlencode, parse_qs, urlparse
 
+import anthropic
 import click
 import requests
 import yaml
@@ -319,12 +321,20 @@ class GitHubMetrics:
 
 
 @dataclass
+class MonthlySummary:
+    month: str  # YYYY-MM format
+    month_display: str  # e.g., "January 2024"
+    summary: str  # AI-generated summary
+
+
+@dataclass
 class PersonReport:
     name: str
     date_range: tuple[str, str]
     jira: JiraMetrics = field(default_factory=JiraMetrics)
     confluence: ConfluenceMetrics = field(default_factory=ConfluenceMetrics)
     github: GitHubMetrics = field(default_factory=GitHubMetrics)
+    monthly_summaries: list[MonthlySummary] = field(default_factory=list)
 
 
 # =============================================================================
@@ -854,6 +864,171 @@ class GitHubClient:
 
 
 # =============================================================================
+# AI Summary Generation
+# =============================================================================
+
+
+def get_months_in_range(start_date: str, end_date: str) -> list[tuple[str, str, str]]:
+    """Get list of (YYYY-MM, display_name, end_of_month) for each month in range."""
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    months = []
+    current = start.replace(day=1)
+
+    while current <= end:
+        month_key = current.strftime("%Y-%m")
+        month_display = current.strftime("%B %Y")
+
+        # Get last day of month
+        if current.month == 12:
+            next_month = current.replace(year=current.year + 1, month=1)
+        else:
+            next_month = current.replace(month=current.month + 1)
+        last_day = (next_month - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        months.append((month_key, month_display, last_day))
+
+        # Move to next month
+        current = next_month
+
+    return months
+
+
+def filter_items_by_month(
+    items: list[dict], date_field: str, month_key: str
+) -> list[dict]:
+    """Filter items to only those in the specified month (YYYY-MM)."""
+    return [
+        item
+        for item in items
+        if item.get(date_field, "").startswith(month_key)
+    ]
+
+
+def generate_monthly_summary(
+    name: str,
+    month_display: str,
+    jira_issues: list[dict],
+    jira_resolved: list[dict],
+    prs_opened: list[dict],
+    prs_merged: list[dict],
+    reviews: list[dict],
+) -> str:
+    """Generate a monthly summary using Claude."""
+    # Build context for Claude
+    context_parts = []
+
+    if jira_issues:
+        jira_summary = "JIRA Issues Assigned:\n"
+        for issue in jira_issues[:20]:  # Limit to avoid token overflow
+            jira_summary += f"- [{issue['key']}] {issue['summary']} (Type: {issue['type']}, Status: {issue['status']})\n"
+        context_parts.append(jira_summary)
+
+    if jira_resolved:
+        resolved_summary = "JIRA Issues Resolved:\n"
+        for issue in jira_resolved[:20]:
+            points = f", {issue['story_points']} pts" if issue.get('story_points') else ""
+            resolved_summary += f"- [{issue['key']}] {issue['summary']} (Type: {issue['type']}{points})\n"
+        context_parts.append(resolved_summary)
+
+    if prs_merged:
+        pr_summary = "GitHub PRs Merged:\n"
+        for pr in prs_merged[:20]:
+            desc = pr.get('description', '')[:200] + "..." if len(pr.get('description', '')) > 200 else pr.get('description', '')
+            pr_summary += f"- [{pr['repo']}#{pr['number']}] {pr['title']}\n"
+            if desc:
+                pr_summary += f"  Description: {desc}\n"
+        context_parts.append(pr_summary)
+
+    if prs_opened:
+        opened_summary = "GitHub PRs Opened:\n"
+        for pr in prs_opened[:20]:
+            opened_summary += f"- [{pr['repo']}#{pr['number']}] {pr['title']}\n"
+        context_parts.append(opened_summary)
+
+    if reviews:
+        review_summary = f"Code Reviews: {len(reviews)} PRs reviewed\n"
+        context_parts.append(review_summary)
+
+    if not context_parts:
+        return "No significant activity recorded for this month."
+
+    context = "\n".join(context_parts)
+
+    # Call Claude API
+    try:
+        client = anthropic.Anthropic()
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""Based on the following activity data for {name} in {month_display}, write a concise professional summary (2-4 sentences) highlighting key accomplishments and focus areas. Focus on the impact and themes of the work, not just listing items.
+
+{context}
+
+Write the summary in third person, using their name. Be specific about what was accomplished.""",
+                }
+            ],
+        )
+        return message.content[0].text
+    except Exception as e:
+        print(f"  Warning: Failed to generate AI summary: {e}", file=sys.stderr)
+        return f"Summary generation failed: {str(e)}"
+
+
+def generate_all_monthly_summaries(
+    report: PersonReport,
+) -> list[MonthlySummary]:
+    """Generate summaries for each month in the report date range."""
+    start_date, end_date = report.date_range
+    months = get_months_in_range(start_date, end_date)
+    summaries = []
+
+    for month_key, month_display, _ in months:
+        print(f"    Generating summary for {month_display}...", file=sys.stderr)
+
+        # Filter data for this month
+        jira_issues = filter_items_by_month(
+            report.jira.issues_assigned, "created", month_key
+        )
+        jira_resolved = filter_items_by_month(
+            report.jira.issues_resolved, "resolved", month_key
+        )
+        prs_opened = filter_items_by_month(
+            report.github.prs_opened, "created_at", month_key
+        )
+        prs_merged = filter_items_by_month(
+            report.github.prs_merged, "merged_at", month_key
+        )
+        reviews = filter_items_by_month(
+            report.github.reviews, "created_at", month_key
+        )
+
+        summary_text = generate_monthly_summary(
+            report.name,
+            month_display,
+            jira_issues,
+            jira_resolved,
+            prs_opened,
+            prs_merged,
+            reviews,
+        )
+
+        summaries.append(
+            MonthlySummary(
+                month=month_key,
+                month_display=month_display,
+                summary=summary_text,
+            )
+        )
+
+    return summaries
+
+
+# =============================================================================
 # HTML Template
 # =============================================================================
 
@@ -1095,6 +1270,56 @@ HTML_TEMPLATE = """
             background: var(--border-color);
         }
 
+        .monthly-summaries {
+            background: var(--bg-primary);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .monthly-summaries h2 {
+            font-size: 1.3em;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--border-color);
+            color: #6f42c1;
+        }
+
+        .month-summary {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            border-left: 4px solid #6f42c1;
+        }
+
+        .month-summary:last-child {
+            margin-bottom: 0;
+        }
+
+        .month-summary h3 {
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            color: var(--text-primary);
+        }
+
+        .month-summary p {
+            color: var(--text-primary);
+            line-height: 1.7;
+        }
+
+        .ai-badge {
+            display: inline-block;
+            font-size: 0.7em;
+            padding: 2px 6px;
+            background: linear-gradient(135deg, #6f42c1, #0052cc);
+            color: white;
+            border-radius: 3px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
         @media (max-width: 768px) {
             .charts-section {
                 grid-template-columns: 1fr;
@@ -1151,6 +1376,18 @@ HTML_TEMPLATE = """
                 <div class="label">Code Reviews</div>
             </div>
         </div>
+
+        {% if monthly_summaries %}
+        <section class="monthly-summaries">
+            <h2>Monthly Summaries <span class="ai-badge">AI Generated</span></h2>
+            {% for summary in monthly_summaries %}
+            <div class="month-summary">
+                <h3>{{ summary.month_display }}</h3>
+                <p>{{ summary.summary }}</p>
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
 
         <div class="charts-section">
             <div class="chart-container">
@@ -1796,6 +2033,7 @@ def generate_report(report: PersonReport, output_dir: str) -> str:
         reviews_by_week=reviews_by_week,
         jira_tickets_by_week=jira_tickets_by_week,
         jira_points_by_week=jira_points_by_week,
+        monthly_summaries=report.monthly_summaries,
     )
 
     # Create filename
@@ -2029,6 +2267,11 @@ def load_config(config_path: str) -> dict:
     is_flag=True,
     help="Run OAuth authorization flow for Atlassian",
 )
+@click.option(
+    "--ai-summary",
+    is_flag=True,
+    help="Generate AI-powered monthly summaries using Claude (requires ANTHROPIC_API_KEY)",
+)
 def main(
     config: Optional[str],
     start: Optional[str],
@@ -2036,6 +2279,7 @@ def main(
     output: str,
     github_org: Optional[str],
     auth: bool,
+    ai_summary: bool,
 ):
     """Generate activity reports for team members across Jira, Confluence, and GitHub."""
 
@@ -2158,6 +2402,14 @@ def main(
                 )
             except Exception as e:
                 print(f"  Warning: Error fetching GitHub data: {e}", file=sys.stderr)
+
+        # Generate AI summaries if requested
+        if ai_summary:
+            try:
+                print(f"  Generating AI summaries...", file=sys.stderr)
+                report.monthly_summaries = generate_all_monthly_summaries(report)
+            except Exception as e:
+                print(f"  Warning: Error generating AI summaries: {e}", file=sys.stderr)
 
         # Export to CSV
         try:
