@@ -12,8 +12,8 @@
 """
 Multi-Platform Activity Report Generator
 
-Generates individual HTML reports summarizing activity across Jira, Confluence,
-and GitHub for multiple team members.
+Generates individual HTML reports summarizing activity across Jira and GitHub
+for multiple team members.
 """
 
 import csv
@@ -143,7 +143,7 @@ class AtlassianOAuth:
         params = {
             "audience": "api.atlassian.com",
             "client_id": self.client_id,
-            "scope": "read:jira-work read:jira-user search:jira read:confluence-content.all read:confluence-user read:confluence-space.summary read:me offline_access",
+            "scope": "read:jira-work read:jira-user search:jira read:me offline_access",
             "redirect_uri": self.redirect_uri,
             "state": state,
             "response_type": "code",
@@ -307,13 +307,6 @@ class JiraMetrics:
 
 
 @dataclass
-class ConfluenceMetrics:
-    pages_created: list[dict] = field(default_factory=list)
-    pages_edited: list[dict] = field(default_factory=list)
-    comments_made: list[dict] = field(default_factory=list)
-
-
-@dataclass
 class GitHubMetrics:
     prs_opened: list[dict] = field(default_factory=list)
     prs_merged: list[dict] = field(default_factory=list)
@@ -332,7 +325,6 @@ class PersonReport:
     name: str
     date_range: tuple[str, str]
     jira: JiraMetrics = field(default_factory=JiraMetrics)
-    confluence: ConfluenceMetrics = field(default_factory=ConfluenceMetrics)
     github: GitHubMetrics = field(default_factory=GitHubMetrics)
     monthly_summaries: list[MonthlySummary] = field(default_factory=list)
 
@@ -343,7 +335,7 @@ class PersonReport:
 
 
 class AtlassianClient:
-    """Client for Jira and Confluence REST APIs with OAuth 2.0 support."""
+    """Client for Jira REST API with OAuth 2.0 support."""
 
     def __init__(
         self,
@@ -371,9 +363,6 @@ class AtlassianClient:
         if endpoint.startswith("rest/api/"):
             # Jira endpoint
             return f"https://api.atlassian.com/ex/jira/{self.cloud_id}/{endpoint}"
-        elif endpoint.startswith("wiki/"):
-            # Confluence endpoint
-            return f"https://api.atlassian.com/ex/confluence/{self.cloud_id}/{endpoint}"
         else:
             # Default to site URL
             return urljoin(self.site_url + "/", endpoint)
@@ -398,9 +387,8 @@ class AtlassianClient:
                     # Try to refresh token
                     if self.oauth.refresh_token():
                         continue
-                    service = "Confluence" if "/wiki/" in endpoint else "Jira"
                     raise requests.exceptions.HTTPError(
-                        f"{service} authentication failed (401 Unauthorized).\n"
+                        "Jira authentication failed (401 Unauthorized).\n"
                         f"Please run with --auth to re-authorize."
                     )
                 if resp.status_code == 429:  # Rate limited
@@ -521,7 +509,7 @@ class JiraClient(AtlassianClient):
         account_id = self.get_account_id(username)
         jql = f'assignee = "{account_id}" AND created >= "{
             start_date
-        }" AND created <= "{end_date}" AND status NOT IN ("Cancelled", "Dismissed")'
+        }" AND created <= "{end_date}" AND status NOT IN ("Cancelled", "Dismissed") AND issuetype != Epic'
         issues = self.search_issues(jql, expand_changelog=True)
         return [self._format_issue(i) for i in issues]
 
@@ -540,7 +528,7 @@ class JiraClient(AtlassianClient):
         two_years_ago = self._get_two_years_ago()
         jql = f'assignee = "{account_id}" AND resolved >= "{
             start_date
-        }" AND resolved <= "{end_date}" AND created >= "{two_years_ago}"'
+        }" AND resolved <= "{end_date}" AND created >= "{two_years_ago}" AND issuetype != Epic'
         issues = self.search_issues(jql, expand_changelog=True)
         return [self._format_issue(i) for i in issues]
 
@@ -638,85 +626,6 @@ class JiraClient(AtlassianClient):
             "resolved": resolved,
             "story_points": int(story_points) if story_points is not None else None,
             "url": f"{self.site_url}/browse/{issue.get('key')}",
-        }
-
-
-class ConfluenceClient(AtlassianClient):
-    """Confluence-specific API client."""
-
-    def __init__(self, oauth: AtlassianOAuth):
-        super().__init__(oauth=oauth)
-
-    def search_content(self, cql: str, limit: int = 100) -> list[dict]:
-        """Search content using CQL."""
-        all_results = []
-        start = 0
-
-        while True:
-            resp = self.get(
-                "/wiki/rest/api/content/search",
-                params={
-                    "cql": cql,
-                    "start": start,
-                    "limit": limit,
-                    "expand": "space,version",
-                },
-            )
-            results = resp.get("results", [])
-            all_results.extend(results)
-
-            # Check if there are more results
-            if len(results) < limit:
-                break
-            start += limit
-
-        return all_results
-
-    def get_pages_created(
-        self, username: str, start_date: str, end_date: str
-    ) -> list[dict]:
-        """Get pages created by user in date range."""
-        cql = f'creator = "{username}" AND created >= "{start_date}" AND created <= "{
-            end_date
-        }" AND type = page'
-        pages = self.search_content(cql)
-        return [self._format_page(p) for p in pages]
-
-    def get_pages_edited(
-        self, username: str, start_date: str, end_date: str
-    ) -> list[dict]:
-        """Get pages edited by user in date range."""
-        cql = f'contributor = "{username}" AND lastmodified >= "{
-            start_date
-        }" AND lastmodified <= "{end_date}" AND type = page'
-        pages = self.search_content(cql)
-        return [self._format_page(p) for p in pages]
-
-    def get_comments_made(
-        self, username: str, start_date: str, end_date: str
-    ) -> list[dict]:
-        """Get comments made by user in date range."""
-        cql = f'creator = "{username}" AND created >= "{start_date}" AND created <= "{
-            end_date
-        }" AND type = comment'
-        comments = self.search_content(cql)
-        return [
-            {"id": c.get("id"), "title": c.get("title", "Comment")} for c in comments
-        ]
-
-    def _format_page(self, page: dict) -> dict:
-        """Format page for display."""
-        space = page.get("space", {})
-        version = page.get("version", {})
-        return {
-            "id": page.get("id"),
-            "title": page.get("title", ""),
-            "space": space.get("name", ""),
-            "space_key": space.get("key", ""),
-            "last_modified": version.get("when", "")[:10]
-            if version.get("when")
-            else "",
-            "url": f"{self.site_url}/wiki{page.get('_links', {}).get('webui', '')}",
         }
 
 
@@ -1110,7 +1019,6 @@ HTML_TEMPLATE = """
             --text-secondary: #6c757d;
             --border-color: #dee2e6;
             --accent-jira: #0052cc;
-            --accent-confluence: #1868db;
             --accent-github: #24292f;
             --success: #28a745;
         }
@@ -1173,7 +1081,6 @@ HTML_TEMPLATE = """
         }
 
         .card.jira { border-top: 4px solid var(--accent-jira); }
-        .card.confluence { border-top: 4px solid var(--accent-confluence); }
         .card.github { border-top: 4px solid var(--accent-github); }
 
         .card .metric {
@@ -1223,7 +1130,6 @@ HTML_TEMPLATE = """
         }
 
         section.details h2.jira { color: var(--accent-jira); }
-        section.details h2.confluence { color: var(--accent-confluence); }
         section.details h2.github { color: var(--accent-github); }
 
         table {
@@ -1421,14 +1327,6 @@ HTML_TEMPLATE = """
                 <div class="metric">{{ jira.issues_assigned | length }}</div>
                 <div class="label">Jira Issues Assigned</div>
             </div>
-            <div class="card confluence">
-                <div class="metric">{{ confluence.pages_created | length }}</div>
-                <div class="label">Confluence Pages Created</div>
-            </div>
-            <div class="card confluence">
-                <div class="metric">{{ confluence.pages_edited | length }}</div>
-                <div class="label">Pages Edited</div>
-            </div>
             <div class="card github">
                 <div class="metric">{{ github.prs_merged | length }}</div>
                 <div class="label">PRs Merged</div>
@@ -1495,58 +1393,6 @@ HTML_TEMPLATE = """
             </table>
             {% else %}
             <p class="empty-state">No new issues assigned in this period</p>
-            {% endif %}
-        </section>
-
-        <section class="details">
-            <h2 class="confluence">Confluence Activity</h2>
-
-            <h4>Pages Created ({{ confluence.pages_created | length }})</h4>
-            {% if confluence.pages_created %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>Title</th>
-                        <th>Space</th>
-                        <th>Last Modified</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for page in confluence.pages_created %}
-                    <tr data-date="{{ page.last_modified }}">
-                        <td><a href="{{ page.url }}" target="_blank">{{ page.title }}</a></td>
-                        <td>{{ page.space }}</td>
-                        <td>{{ page.last_modified }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <p class="empty-state">No pages created in this period</p>
-            {% endif %}
-
-            <h4>Pages Edited ({{ confluence.pages_edited | length }})</h4>
-            {% if confluence.pages_edited %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>Title</th>
-                        <th>Space</th>
-                        <th>Last Modified</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for page in confluence.pages_edited %}
-                    <tr data-date="{{ page.last_modified }}">
-                        <td><a href="{{ page.url }}" target="_blank">{{ page.title }}</a></td>
-                        <td>{{ page.space }}</td>
-                        <td>{{ page.last_modified }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <p class="empty-state">No pages edited in this period</p>
             {% endif %}
         </section>
 
@@ -2046,7 +1892,6 @@ def generate_report(report: PersonReport, output_dir: str) -> str:
         end_date=report.date_range[1],
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         jira=report.jira,
-        confluence=report.confluence,
         github=report.github,
         week_labels=week_labels,
         prs_opened_by_week=prs_opened_by_week,
@@ -2121,40 +1966,6 @@ def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
             writer.writeheader()
             writer.writerows(report.jira.issues_resolved)
         csv_files.append(jira_resolved_filepath)
-
-    # Confluence pages CSV (created + edited combined)
-    confluence_pages = []
-    for page in report.confluence.pages_created:
-        confluence_pages.append({**page, "activity_type": "created"})
-    for page in report.confluence.pages_edited:
-        confluence_pages.append({**page, "activity_type": "edited"})
-
-    if confluence_pages:
-        confluence_filename = f"{safe_name}_confluence_pages_{start}_{end}.csv"
-        confluence_filepath = os.path.join(output_dir, confluence_filename)
-        with open(confluence_filepath, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=[
-                    "title",
-                    "space",
-                    "activity_type",
-                    "last_modified",
-                    "url",
-                ],
-            )
-            writer.writeheader()
-            for page in confluence_pages:
-                writer.writerow(
-                    {
-                        "title": page.get("title", ""),
-                        "space": page.get("space", ""),
-                        "activity_type": page.get("activity_type", ""),
-                        "last_modified": page.get("last_modified", ""),
-                        "url": page.get("url", ""),
-                    }
-                )
-        csv_files.append(confluence_filepath)
 
     # GitHub activity CSV (PRs opened + merged + reviews combined)
     github_activity = []
@@ -2302,7 +2113,7 @@ def main(
     auth: bool,
     ai_summary: bool,
 ):
-    """Generate activity reports for team members across Jira, Confluence, and GitHub."""
+    """Generate activity reports for team members across Jira and GitHub."""
 
     # Get OAuth client
     oauth = get_oauth_client()
@@ -2351,7 +2162,6 @@ def main(
     print("Initializing API clients...", file=sys.stderr)
     print(f"Using Atlassian site: {oauth.site_url}", file=sys.stderr)
     jira_client = JiraClient(oauth)
-    confluence_client = ConfluenceClient(oauth)
     github_client = GitHubClient(github_token)
 
     # Process each team member
@@ -2361,7 +2171,6 @@ def main(
     for member in cfg["team"]:
         name = member["name"]
         jira_user = member.get("jira_username", "")
-        confluence_user = member.get("confluence_username", jira_user)
         github_user = member.get("github_username", "")
 
         print(f"\nProcessing {name}...", file=sys.stderr)
@@ -2386,27 +2195,6 @@ def main(
                 )
             except Exception as e:
                 print(f"  Warning: Error fetching Jira data: {e}", file=sys.stderr)
-
-        # Fetch Confluence data
-        if confluence_user:
-            try:
-                print(
-                    f"  Fetching Confluence data for {confluence_user}...",
-                    file=sys.stderr,
-                )
-                report.confluence.pages_created = confluence_client.get_pages_created(
-                    confluence_user, start, end
-                )
-                report.confluence.pages_edited = confluence_client.get_pages_edited(
-                    confluence_user, start, end
-                )
-                report.confluence.comments_made = confluence_client.get_comments_made(
-                    confluence_user, start, end
-                )
-            except Exception as e:
-                print(
-                    f"  Warning: Error fetching Confluence data: {e}", file=sys.stderr
-                )
 
         # Fetch GitHub data
         if github_user:
