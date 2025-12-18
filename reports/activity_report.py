@@ -15,6 +15,7 @@ Generates individual HTML reports summarizing activity across Jira, Confluence,
 and GitHub for multiple team members.
 """
 
+import csv
 import os
 import sys
 import time
@@ -1266,6 +1267,112 @@ def generate_report(report: PersonReport, output_dir: str) -> str:
     return filepath
 
 
+def export_to_csv(report: PersonReport, output_dir: str) -> list[str]:
+    """Export report data to CSV files."""
+    os.makedirs(output_dir, exist_ok=True)
+    safe_name = report.name.lower().replace(" ", "_")
+    start, end = report.date_range
+    csv_files = []
+
+    # Jira issues CSV
+    if report.jira.issues_assigned:
+        jira_filename = f"{safe_name}_jira_issues_{start}_{end}.csv"
+        jira_filepath = os.path.join(output_dir, jira_filename)
+        with open(jira_filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "key",
+                    "summary",
+                    "type",
+                    "status",
+                    "story_points",
+                    "created",
+                    "resolved",
+                    "url",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(report.jira.issues_assigned)
+        csv_files.append(jira_filepath)
+
+    # Confluence pages CSV (created + edited combined)
+    confluence_pages = []
+    for page in report.confluence.pages_created:
+        confluence_pages.append({**page, "activity_type": "created"})
+    for page in report.confluence.pages_edited:
+        confluence_pages.append({**page, "activity_type": "edited"})
+
+    if confluence_pages:
+        confluence_filename = f"{safe_name}_confluence_pages_{start}_{end}.csv"
+        confluence_filepath = os.path.join(output_dir, confluence_filename)
+        with open(confluence_filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "title",
+                    "space",
+                    "activity_type",
+                    "last_modified",
+                    "url",
+                ],
+            )
+            writer.writeheader()
+            for page in confluence_pages:
+                writer.writerow({
+                    "title": page.get("title", ""),
+                    "space": page.get("space", ""),
+                    "activity_type": page.get("activity_type", ""),
+                    "last_modified": page.get("last_modified", ""),
+                    "url": page.get("url", ""),
+                })
+        csv_files.append(confluence_filepath)
+
+    # GitHub activity CSV (PRs opened + merged + reviews combined)
+    github_activity = []
+    for pr in report.github.prs_opened:
+        github_activity.append({
+            "number": pr.get("number"),
+            "title": pr.get("title", ""),
+            "activity_type": "pr_opened",
+            "repo": pr.get("repo", ""),
+            "date": pr.get("created_at", ""),
+            "url": pr.get("url", ""),
+        })
+    for pr in report.github.prs_merged:
+        github_activity.append({
+            "number": pr.get("number"),
+            "title": pr.get("title", ""),
+            "activity_type": "pr_merged",
+            "repo": pr.get("repo", ""),
+            "date": pr.get("merged_at") or pr.get("created_at", ""),
+            "url": pr.get("url", ""),
+        })
+    for pr in report.github.reviews:
+        github_activity.append({
+            "number": pr.get("number"),
+            "title": pr.get("title", ""),
+            "activity_type": "review",
+            "repo": pr.get("repo", ""),
+            "date": pr.get("created_at", ""),
+            "url": pr.get("url", ""),
+        })
+
+    if github_activity:
+        github_filename = f"{safe_name}_github_activity_{start}_{end}.csv"
+        github_filepath = os.path.join(output_dir, github_filename)
+        with open(github_filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["number", "title", "activity_type", "repo", "date", "url"],
+            )
+            writer.writeheader()
+            writer.writerows(github_activity)
+        csv_files.append(github_filepath)
+
+    return csv_files
+
+
 # =============================================================================
 # Main CLI
 # =============================================================================
@@ -1398,6 +1505,7 @@ def main(
 
     # Process each team member
     reports_generated = []
+    csvs_generated = []
 
     for member in cfg["team"]:
         name = member["name"]
@@ -1462,6 +1570,15 @@ def main(
             except Exception as e:
                 print(f"  Warning: Error fetching GitHub data: {e}", file=sys.stderr)
 
+        # Export to CSV
+        try:
+            csv_files = export_to_csv(report, output)
+            csvs_generated.extend(csv_files)
+            for csv_file in csv_files:
+                print(f"  Exported: {csv_file}", file=sys.stderr)
+        except Exception as e:
+            print(f"  Error exporting CSV: {e}", file=sys.stderr)
+
         # Generate report
         try:
             filepath = generate_report(report, output)
@@ -1472,7 +1589,10 @@ def main(
 
     # Summary
     print(f"\n{'=' * 50}", file=sys.stderr)
-    print(f"Generated {len(reports_generated)} report(s):", file=sys.stderr)
+    print(f"Generated {len(csvs_generated)} CSV file(s):", file=sys.stderr)
+    for path in csvs_generated:
+        print(f"  - {path}", file=sys.stderr)
+    print(f"\nGenerated {len(reports_generated)} HTML report(s):", file=sys.stderr)
     for path in reports_generated:
         print(f"  - {path}", file=sys.stderr)
 
