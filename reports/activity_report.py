@@ -623,9 +623,10 @@ class JiraClient(AtlassianClient):
         resolved = fields.get("resolved", "")[:10] if fields.get("resolved") else ""
         if not resolved:
             # Try to get the date from changelog when status changed to Closed/Resolved/Done
-            resolved = self._get_status_change_date(
-                issue, ["Closed", "Resolved", "Done"]
-            ) or ""
+            resolved = (
+                self._get_status_change_date(issue, ["Closed", "Resolved", "Done"])
+                or ""
+            )
 
         return {
             "key": issue.get("key"),
@@ -720,7 +721,58 @@ class ConfluenceClient(AtlassianClient):
 
 
 class GitHubClient:
-    """GitHub API client using GraphQL and REST."""
+    """GitHub API client using GraphQL."""
+
+    # GraphQL query to fetch all PR activity in a single request
+    ACTIVITY_QUERY = """
+    query($q1: String!, $q2: String!, $q3: String!, $first: Int!, $after1: String, $after2: String, $after3: String) {
+      prsOpened: search(query: $q1, type: ISSUE, first: $first, after: $after1) {
+        nodes {
+          ... on PullRequest {
+            number
+            title
+            body
+            state
+            url
+            createdAt
+            mergedAt
+            repository { nameWithOwner }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+      prsMerged: search(query: $q2, type: ISSUE, first: $first, after: $after2) {
+        nodes {
+          ... on PullRequest {
+            number
+            title
+            body
+            state
+            url
+            createdAt
+            mergedAt
+            repository { nameWithOwner }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+      reviewed: search(query: $q3, type: ISSUE, first: $first, after: $after3) {
+        nodes {
+          ... on PullRequest {
+            number
+            title
+            body
+            state
+            url
+            createdAt
+            mergedAt
+            repository { nameWithOwner }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+    """
 
     def __init__(self, token: str):
         self.token = token
@@ -732,7 +784,6 @@ class GitHubClient:
             }
         )
         self.graphql_url = "https://api.github.com/graphql"
-        self.rest_url = "https://api.github.com"
 
     def _graphql(self, query: str, variables: dict = None) -> dict:
         """Execute a GraphQL query."""
@@ -767,100 +818,111 @@ class GitHubClient:
                 time.sleep(2**attempt)
         return {}
 
-    def _search_issues(self, query: str) -> list[dict]:
-        """Search issues/PRs using REST API."""
-        all_items = []
-        page = 1
-        per_page = 100
-
-        while True:
-            resp = self.session.get(
-                f"{self.rest_url}/search/issues",
-                params={
-                    "q": query,
-                    "per_page": per_page,
-                    "page": page,
-                },
-            )
-            if resp.status_code == 401:
-                raise requests.exceptions.HTTPError(
-                    f"GitHub authentication failed. Please check your GITHUB_TOKEN:\n"
-                    f"  - Ensure the token is valid and not expired\n"
-                    f"  - Token needs 'repo' scope for private repos or 'public_repo' for public repos\n"
-                    f"  - For org searches, token may need 'read:org' scope"
-                )
-            if resp.status_code == 403:
-                reset_time = int(
-                    resp.headers.get("X-RateLimit-Reset", time.time() + 60)
-                )
-                wait_time = max(reset_time - time.time(), 0) + 1
-                print(f"  Rate limited, waiting {int(wait_time)}s...", file=sys.stderr)
-                time.sleep(wait_time)
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            items = data.get("items", [])
-            all_items.extend(items)
-
-            if len(items) < per_page:
-                break
-            page += 1
-
-        return all_items
-
-    def get_prs_opened(
-        self, username: str, start_date: str, end_date: str, org: Optional[str] = None
-    ) -> list[dict]:
-        """Get PRs opened by user in date range."""
-        query = f"is:pr author:{username} created:{start_date}..{end_date}"
-        if org:
-            query += f" org:{org}"
-        prs = self._search_issues(query)
-        return [self._format_pr(pr) for pr in prs]
+    def _format_pr_graphql(self, node: dict) -> dict:
+        """Format PR from GraphQL response for display."""
+        if not node:
+            return {}
+        repo = node.get("repository", {})
+        created_at = node.get("createdAt", "")
+        merged_at = node.get("mergedAt", "")
+        return {
+            "number": node.get("number"),
+            "title": node.get("title", ""),
+            "description": node.get("body", "") or "",
+            "state": node.get("state", "").lower(),
+            "repo": repo.get("nameWithOwner", ""),
+            "created_at": created_at[:10] if created_at else "",
+            "merged_at": merged_at[:10] if merged_at else "",
+            "url": node.get("url", ""),
+        }
 
     def _get_two_years_ago(self) -> str:
         """Get date string for 2 years ago."""
         two_years_ago = datetime.now().replace(year=datetime.now().year - 2)
         return two_years_ago.strftime("%Y-%m-%d")
 
-    def get_prs_merged(
+    def get_all_activity(
         self, username: str, start_date: str, end_date: str, org: Optional[str] = None
-    ) -> list[dict]:
-        """Get PRs merged by user in date range."""
-        two_years_ago = self._get_two_years_ago()
-        query = f"is:pr is:merged author:{username} merged:{start_date}..{end_date} created:>{two_years_ago}"
-        if org:
-            query += f" org:{org}"
-        prs = self._search_issues(query)
-        return [self._format_pr(pr) for pr in prs]
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        """Fetch all GitHub activity (PRs opened, merged, reviews) in a single GraphQL request.
 
-    def get_reviews(
-        self, username: str, start_date: str, end_date: str, org: Optional[str] = None
-    ) -> list[dict]:
-        """Get PRs reviewed by user in date range."""
+        Returns:
+            Tuple of (prs_opened, prs_merged, reviews)
+        """
         two_years_ago = self._get_two_years_ago()
-        query = f"is:pr reviewed-by:{username} updated:{start_date}..{end_date} created:>{two_years_ago}"
-        if org:
-            query += f" org:{org}"
-        prs = self._search_issues(query)
-        return [self._format_pr(pr) for pr in prs]
+        org_filter = f" org:{org}" if org else ""
 
-    def _format_pr(self, pr: dict) -> dict:
-        """Format PR for display."""
-        repo_url = pr.get("repository_url", "")
-        repo_name = "/".join(repo_url.split("/")[-2:]) if repo_url else ""
-        return {
-            "number": pr.get("number"),
-            "title": pr.get("title", ""),
-            "description": pr.get("body", "") or "",
-            "state": pr.get("state", ""),
-            "repo": repo_name,
-            "created_at": pr.get("created_at", "")[:10] if pr.get("created_at") else "",
-            "merged_at": pr.get("pull_request", {}).get("merged_at", "")[:10]
-            if pr.get("pull_request", {}).get("merged_at")
-            else "",
-            "url": pr.get("html_url", ""),
-        }
+        # Build query strings for each search
+        q1 = f"is:pr author:{username} created:{start_date}..{end_date}{org_filter}"
+        q2 = f"is:pr is:merged author:{username} merged:{start_date}..{end_date} created:>{two_years_ago}{org_filter}"
+        q3 = f"is:pr reviewed-by:{username} updated:{start_date}..{end_date} created:>{two_years_ago}{org_filter}"
+
+        # Collect all results with pagination support
+        prs_opened = []
+        prs_merged = []
+        reviews = []
+
+        # Track cursors for each query
+        cursors = {"after1": None, "after2": None, "after3": None}
+        has_more = {"prsOpened": True, "prsMerged": True, "reviewed": True}
+
+        while any(has_more.values()):
+            variables = {
+                "q1": q1,
+                "q2": q2,
+                "q3": q3,
+                "first": 100,
+                **cursors,
+            }
+
+            result = self._graphql(self.ACTIVITY_QUERY, variables)
+
+            if "errors" in result:
+                error_msg = result["errors"][0].get("message", "Unknown GraphQL error")
+                raise requests.exceptions.HTTPError(
+                    f"GitHub GraphQL error: {error_msg}"
+                )
+
+            data = result.get("data", {})
+
+            # Process prsOpened
+            if has_more["prsOpened"]:
+                opened_data = data.get("prsOpened", {})
+                nodes = opened_data.get("nodes", [])
+                prs_opened.extend([self._format_pr_graphql(n) for n in nodes if n])
+                page_info = opened_data.get("pageInfo", {})
+                if page_info.get("hasNextPage"):
+                    cursors["after1"] = page_info.get("endCursor")
+                else:
+                    has_more["prsOpened"] = False
+
+            # Process prsMerged
+            if has_more["prsMerged"]:
+                merged_data = data.get("prsMerged", {})
+                nodes = merged_data.get("nodes", [])
+                prs_merged.extend([self._format_pr_graphql(n) for n in nodes if n])
+                page_info = merged_data.get("pageInfo", {})
+                if page_info.get("hasNextPage"):
+                    cursors["after2"] = page_info.get("endCursor")
+                else:
+                    has_more["prsMerged"] = False
+
+            # Process reviewed
+            if has_more["reviewed"]:
+                reviewed_data = data.get("reviewed", {})
+                nodes = reviewed_data.get("nodes", [])
+                reviews.extend([self._format_pr_graphql(n) for n in nodes if n])
+                page_info = reviewed_data.get("pageInfo", {})
+                if page_info.get("hasNextPage"):
+                    cursors["after3"] = page_info.get("endCursor")
+                else:
+                    has_more["reviewed"] = False
+
+            # If no more data to fetch for any query, break
+            if not any(has_more.values()):
+                break
+
+        return prs_opened, prs_merged, reviews
 
 
 # =============================================================================
@@ -899,11 +961,7 @@ def filter_items_by_month(
     items: list[dict], date_field: str, month_key: str
 ) -> list[dict]:
     """Filter items to only those in the specified month (YYYY-MM)."""
-    return [
-        item
-        for item in items
-        if item.get(date_field, "").startswith(month_key)
-    ]
+    return [item for item in items if item.get(date_field, "").startswith(month_key)]
 
 
 def generate_monthly_summary(
@@ -928,14 +986,20 @@ def generate_monthly_summary(
     if jira_resolved:
         resolved_summary = "JIRA Issues Resolved:\n"
         for issue in jira_resolved[:20]:
-            points = f", {issue['story_points']} pts" if issue.get('story_points') else ""
+            points = (
+                f", {issue['story_points']} pts" if issue.get("story_points") else ""
+            )
             resolved_summary += f"- [{issue['key']}] {issue['summary']} (Type: {issue['type']}{points})\n"
         context_parts.append(resolved_summary)
 
     if prs_merged:
         pr_summary = "GitHub PRs Merged:\n"
         for pr in prs_merged[:20]:
-            desc = pr.get('description', '')[:200] + "..." if len(pr.get('description', '')) > 200 else pr.get('description', '')
+            desc = (
+                pr.get("description", "")[:200] + "..."
+                if len(pr.get("description", "")) > 200
+                else pr.get("description", "")
+            )
             pr_summary += f"- [{pr['repo']}#{pr['number']}] {pr['title']}\n"
             if desc:
                 pr_summary += f"  Description: {desc}\n"
@@ -1003,9 +1067,7 @@ def generate_all_monthly_summaries(
         prs_merged = filter_items_by_month(
             report.github.prs_merged, "merged_at", month_key
         )
-        reviews = filter_items_by_month(
-            report.github.reviews, "created_at", month_key
-        )
+        reviews = filter_items_by_month(report.github.reviews, "created_at", month_key)
 
         summary_text = generate_monthly_summary(
             report.name,
@@ -2350,15 +2412,12 @@ def main(
         if github_user:
             try:
                 print(f"  Fetching GitHub data for {github_user}...", file=sys.stderr)
-                report.github.prs_opened = github_client.get_prs_opened(
+                prs_opened, prs_merged, reviews = github_client.get_all_activity(
                     github_user, start, end, github_org
                 )
-                report.github.prs_merged = github_client.get_prs_merged(
-                    github_user, start, end, github_org
-                )
-                report.github.reviews = github_client.get_reviews(
-                    github_user, start, end, github_org
-                )
+                report.github.prs_opened = prs_opened
+                report.github.prs_merged = prs_merged
+                report.github.reviews = reviews
             except Exception as e:
                 print(f"  Warning: Error fetching GitHub data: {e}", file=sys.stderr)
 
