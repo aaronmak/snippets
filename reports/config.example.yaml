@@ -47,16 +47,13 @@
 team:
   - name: "John Doe"
     jira_username: "jdoe" # Jira account ID or email
-    confluence_username: "jdoe" # Confluence account ID or email
     github_username: "johndoe"
 
   - name: "Jane Smith"
     jira_username: "jsmith"
-    confluence_username: "jsmith"
     github_username: "janesmith"
 
   # Add more team members as needed:
   # - name: "Team Member"
   #   jira_username: "username"
-  #   confluence_username: "username"
   #   github_username: "ghuser"
