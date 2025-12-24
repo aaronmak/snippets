@@ -754,14 +754,40 @@ class GitHubClient:
         two_years_ago = datetime.now().replace(year=datetime.now().year - 2)
         return two_years_ago.strftime("%Y-%m-%d")
 
-    def get_all_activity(
+    def _get_monthly_ranges(
+        self, start_date: str, end_date: str
+    ) -> list[tuple[str, str]]:
+        """Split a date range into monthly chunks to avoid GitHub's 1000 result limit."""
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+
+        ranges = []
+        current = start
+
+        while current <= end:
+            # Get the last day of the current month
+            if current.month == 12:
+                next_month = current.replace(year=current.year + 1, month=1, day=1)
+            else:
+                next_month = current.replace(month=current.month + 1, day=1)
+            month_end = next_month - timedelta(days=1)
+
+            # Clamp to the actual end date
+            chunk_end = min(month_end, end)
+
+            ranges.append(
+                (current.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d"))
+            )
+
+            # Move to the first day of the next month
+            current = next_month
+
+        return ranges
+
+    def _fetch_activity_chunk(
         self, username: str, start_date: str, end_date: str, org: Optional[str] = None
     ) -> tuple[list[dict], list[dict], list[dict]]:
-        """Fetch all GitHub activity (PRs opened, merged, reviews) in a single GraphQL request.
-
-        Returns:
-            Tuple of (prs_opened, prs_merged, reviews)
-        """
+        """Fetch GitHub activity for a single date chunk."""
         two_years_ago = self._get_two_years_ago()
         org_filter = f" org:{org}" if org else ""
 
@@ -836,6 +862,56 @@ class GitHubClient:
                 break
 
         return prs_opened, prs_merged, reviews
+
+    def get_all_activity(
+        self, username: str, start_date: str, end_date: str, org: Optional[str] = None
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        """Fetch all GitHub activity (PRs opened, merged, reviews) chunked by month.
+
+        Splits the date range into monthly chunks to avoid GitHub's 1000 result limit
+        per search query.
+
+        Returns:
+            Tuple of (prs_opened, prs_merged, reviews)
+        """
+        monthly_ranges = self._get_monthly_ranges(start_date, end_date)
+
+        all_prs_opened = []
+        all_prs_merged = []
+        all_reviews = []
+
+        # Track seen URLs to deduplicate across months (reviews use 'updated' which can span months)
+        seen_opened = set()
+        seen_merged = set()
+        seen_reviews = set()
+
+        for chunk_start, chunk_end in monthly_ranges:
+            prs_opened, prs_merged, reviews = self._fetch_activity_chunk(
+                username, chunk_start, chunk_end, org
+            )
+
+            # Deduplicate PRs opened
+            for pr in prs_opened:
+                url = pr.get("url")
+                if url and url not in seen_opened:
+                    seen_opened.add(url)
+                    all_prs_opened.append(pr)
+
+            # Deduplicate PRs merged
+            for pr in prs_merged:
+                url = pr.get("url")
+                if url and url not in seen_merged:
+                    seen_merged.add(url)
+                    all_prs_merged.append(pr)
+
+            # Deduplicate reviews (most likely to have duplicates due to 'updated' filter)
+            for pr in reviews:
+                url = pr.get("url")
+                if url and url not in seen_reviews:
+                    seen_reviews.add(url)
+                    all_reviews.append(pr)
+
+        return all_prs_opened, all_prs_merged, all_reviews
 
 
 # =============================================================================
