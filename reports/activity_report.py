@@ -2168,10 +2168,10 @@ def load_config(config_path: str) -> dict:
 
     for i, member in enumerate(config["team"]):
         required = ["name"]
-        for field in required:
-            if field not in member:
+        for f in required:
+            if f not in member:
                 raise click.ClickException(
-                    f"Team member {i + 1} missing required field: {field}"
+                    f"Team member {i + 1} missing required field: {f}"
                 )
 
     return config
@@ -2301,7 +2301,7 @@ def main(
         # Generate AI summaries if requested
         if ai_summary:
             try:
-                print(f"  Generating AI summaries...", file=sys.stderr)
+                print("  Generating AI summaries...", file=sys.stderr)
                 report.monthly_summaries = generate_all_monthly_summaries(report)
             except Exception as e:
                 print(f"  Warning: Error generating AI summaries: {e}", file=sys.stderr)
