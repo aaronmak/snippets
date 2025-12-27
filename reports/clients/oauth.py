@@ -54,7 +54,7 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, format, *args):
+    def log_message(self, format: str, *args) -> None:
         """Suppress logging."""
         pass
 
@@ -79,7 +79,7 @@ class AtlassianOAuth:
         self.site_url: Optional[str] = None
         self._load_tokens()
 
-    def _load_tokens(self):
+    def _load_tokens(self) -> None:
         """Load tokens from file if they exist."""
         if self.token_file.exists():
             try:
@@ -91,7 +91,7 @@ class AtlassianOAuth:
             except (json.JSONDecodeError, IOError):
                 self.tokens = {}
 
-    def _save_tokens(self):
+    def _save_tokens(self) -> None:
         """Save tokens to file."""
         with open(self.token_file, "w") as f:
             json.dump(

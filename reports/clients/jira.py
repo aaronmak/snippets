@@ -244,9 +244,9 @@ class JiraClient(AtlassianClient):
         if isinstance(adf, str):
             return adf
 
-        texts = []
+        texts: list[str] = []
 
-        def extract(node):
+        def extract(node: dict | list) -> None:
             if isinstance(node, dict):
                 if node.get("type") == "text":
                     texts.append(node.get("text", ""))
@@ -260,7 +260,7 @@ class JiraClient(AtlassianClient):
         return " ".join(texts)
 
     def _get_status_change_date(
-        self, issue: dict, target_statuses: list[str]
+        self, issue: dict, target_statuses: list[JiraStatus | str]
     ) -> Optional[str]:
         """Extract the date when issue status changed to one of the target statuses.
 
