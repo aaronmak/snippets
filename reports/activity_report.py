@@ -956,21 +956,13 @@ def filter_items_by_month(
 def generate_monthly_summary(
     name: str,
     month_display: str,
-    jira_issues: list[dict],
     jira_resolved: list[dict],
-    prs_opened: list[dict],
     prs_merged: list[dict],
     reviews: list[dict],
 ) -> str:
     """Generate a monthly summary using Claude."""
     # Build context for Claude
     context_parts = []
-
-    if jira_issues:
-        jira_summary = "JIRA Issues Assigned:\n"
-        for issue in jira_issues[:20]:  # Limit to avoid token overflow
-            jira_summary += f"- [{issue['key']}] {issue['summary']} (Type: {issue['type']}, Status: {issue['status']})\n"
-        context_parts.append(jira_summary)
 
     if jira_resolved:
         resolved_summary = "JIRA Issues Resolved:\n"
@@ -993,12 +985,6 @@ def generate_monthly_summary(
             if desc:
                 pr_summary += f"  Description: {desc}\n"
         context_parts.append(pr_summary)
-
-    if prs_opened:
-        opened_summary = "GitHub PRs Opened:\n"
-        for pr in prs_opened[:20]:
-            opened_summary += f"- [{pr['repo']}#{pr['number']}] {pr['title']}\n"
-        context_parts.append(opened_summary)
 
     if reviews:
         review_summary = f"Code Reviews: {len(reviews)} PRs reviewed\n"
@@ -1043,15 +1029,9 @@ def generate_all_monthly_summaries(
     for month_key, month_display, _ in months:
         print(f"    Generating summary for {month_display}...", file=sys.stderr)
 
-        # Filter data for this month
-        jira_issues = filter_items_by_month(
-            report.jira.issues_assigned, "created", month_key
-        )
+        # Filter data for this month (based on completion date: resolved for JIRA, merged for PRs)
         jira_resolved = filter_items_by_month(
             report.jira.issues_resolved, "resolved", month_key
-        )
-        prs_opened = filter_items_by_month(
-            report.github.prs_opened, "created_at", month_key
         )
         prs_merged = filter_items_by_month(
             report.github.prs_merged, "merged_at", month_key
@@ -1061,9 +1041,7 @@ def generate_all_monthly_summaries(
         summary_text = generate_monthly_summary(
             report.name,
             month_display,
-            jira_issues,
             jira_resolved,
-            prs_opened,
             prs_merged,
             reviews,
         )
