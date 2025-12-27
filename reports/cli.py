@@ -10,6 +10,7 @@ import click
 import yaml
 
 from clients import AtlassianOAuth, JiraClient, GitHubClient
+from constants import DEFAULT_STORY_POINTS_FIELD
 from generators import generate_report, export_to_csv, generate_all_monthly_summaries
 from logging_config import setup_logging
 from models import PersonReport
@@ -92,6 +93,11 @@ def load_config(config_path: str) -> dict:
     is_flag=True,
     help="Enable verbose logging output",
 )
+@click.option(
+    "--story-points-field",
+    default=None,
+    help=f"Jira custom field ID for story points (default: {DEFAULT_STORY_POINTS_FIELD})",
+)
 def main(
     config: Optional[str],
     start: Optional[str],
@@ -101,6 +107,7 @@ def main(
     auth: bool,
     ai_summary: bool,
     verbose: bool,
+    story_points_field: Optional[str],
 ):
     """Generate activity reports for team members across Jira and GitHub."""
     # Set up logging
@@ -149,10 +156,17 @@ def main(
     # Validate GitHub token
     github_token = validate_github_token()
 
+    # Determine story points field: CLI > config > default
+    sp_field = (
+        story_points_field
+        or cfg.get("story_points_field")
+        or DEFAULT_STORY_POINTS_FIELD
+    )
+
     # Initialize clients
     logger.info("Initializing API clients...")
     logger.info("Using Atlassian site: %s", oauth.site_url)
-    jira_client = JiraClient(oauth)
+    jira_client = JiraClient(oauth, story_points_field=sp_field)
     github_client = GitHubClient(github_token)
 
     # Process each team member

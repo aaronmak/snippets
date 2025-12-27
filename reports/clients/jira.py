@@ -102,9 +102,10 @@ class AtlassianClient:
 class JiraClient(AtlassianClient):
     """Jira-specific API client."""
 
-    def __init__(self, oauth: AtlassianOAuth):
+    def __init__(self, oauth: AtlassianOAuth, story_points_field: str = DEFAULT_STORY_POINTS_FIELD):
         super().__init__(oauth=oauth)
         self._account_id_cache: dict[str, str] = {}
+        self.story_points_field = story_points_field
 
     def get_account_id(self, username: str) -> Optional[str]:
         """Look up account ID from username/email."""
@@ -194,8 +195,8 @@ class JiraClient(AtlassianClient):
         """Get issues created and assigned to user in date range."""
         account_id = self.get_account_id(username)
         jql = f'assignee = "{account_id}" AND created >= "{start_date}" AND created <= "{end_date}" AND status NOT IN ("{JiraStatus.CANCELLED}", "{JiraStatus.DISMISSED}") AND issuetype != {JiraIssueType.EPIC}'
-        issues = self.search_issues(jql, expand_changelog=True)
-        return [self._format_issue(i) for i in issues]
+        issues = self.search_issues(jql, expand_changelog=True, story_points_field=self.story_points_field)
+        return [self._format_issue(i, self.story_points_field) for i in issues]
 
     def _get_two_years_ago(self) -> str:
         """Get date string for 2 years ago."""
@@ -211,8 +212,8 @@ class JiraClient(AtlassianClient):
         # Add created date bound to satisfy JIRA's unbounded query restriction
         two_years_ago = self._get_two_years_ago()
         jql = f'assignee = "{account_id}" AND resolved >= "{start_date}" AND resolved <= "{end_date}" AND created >= "{two_years_ago}" AND issuetype != {JiraIssueType.EPIC}'
-        issues = self.search_issues(jql, expand_changelog=True)
-        return [self._format_issue(i) for i in issues]
+        issues = self.search_issues(jql, expand_changelog=True, story_points_field=self.story_points_field)
+        return [self._format_issue(i, self.story_points_field) for i in issues]
 
     def get_comments_made(
         self, username: str, start_date: str, end_date: str
@@ -281,10 +282,10 @@ class JiraClient(AtlassianClient):
 
         return None
 
-    def _format_issue(self, issue: dict) -> dict:
+    def _format_issue(self, issue: dict, story_points_field: str = DEFAULT_STORY_POINTS_FIELD) -> dict:
         """Format issue for display."""
         fields = issue.get("fields", {})
-        story_points = fields.get(DEFAULT_STORY_POINTS_FIELD)
+        story_points = fields.get(story_points_field)
         description = self._extract_text_from_adf(fields.get("description"))
 
         # Get resolved date: prefer the resolved field, fall back to changelog
