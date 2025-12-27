@@ -12,7 +12,10 @@ import jinja2
 import requests
 import yaml
 
+from pydantic import ValidationError
+
 from clients import AtlassianOAuth, JiraClient, GitHubClient
+from config import Config, TeamMember
 from constants import DEFAULT_STORY_POINTS_FIELD
 from generators import generate_report, export_to_csv, generate_all_monthly_summaries
 from logging_config import setup_logging
@@ -25,7 +28,7 @@ DEFAULT_MAX_WORKERS = 4
 
 
 def process_team_member(
-    member: dict,
+    member: TeamMember,
     jira_client: JiraClient,
     github_client: GitHubClient,
     start: str,
@@ -35,9 +38,9 @@ def process_team_member(
     output: str,
 ) -> tuple[list[str], list[str]]:
     """Process a single team member and return (csv_files, report_files)."""
-    name = member["name"]
-    jira_user = member.get("jira_username", "")
-    github_user = member.get("github_username", "")
+    name = member.name
+    jira_user = member.jira_username or ""
+    github_user = member.github_username or ""
 
     logger.info("Processing %s...", name)
 
@@ -135,28 +138,24 @@ def validate_github_token() -> str:
     return token
 
 
-def load_config(config_path: str) -> dict:
-    """Load and validate config file."""
+def load_config(config_path: str) -> Config:
+    """Load and validate config file using Pydantic."""
     if not os.path.exists(config_path):
         raise click.ClickException(f"Config file not found: {config_path}")
 
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+        raw_config = yaml.safe_load(f)
 
-    if "team" not in config or not config["team"]:
+    try:
+        return Config.model_validate(raw_config)
+    except ValidationError as e:
+        errors = []
+        for error in e.errors():
+            loc = " -> ".join(str(x) for x in error["loc"])
+            errors.append(f"  {loc}: {error['msg']}")
         raise click.ClickException(
-            "Config must contain 'team' with at least one member"
+            f"Configuration validation failed:\n" + "\n".join(errors)
         )
-
-    for i, member in enumerate(config["team"]):
-        required = ["name"]
-        for field in required:
-            if field not in member:
-                raise click.ClickException(
-                    f"Team member {i + 1} missing required field: {field}"
-                )
-
-    return config
 
 
 @click.command()
@@ -244,11 +243,7 @@ def main(
     github_token = validate_github_token()
 
     # Determine story points field: CLI > config > default
-    sp_field = (
-        story_points_field
-        or cfg.get("story_points_field")
-        or DEFAULT_STORY_POINTS_FIELD
-    )
+    sp_field = story_points_field or cfg.story_points_field
 
     # Initialize clients
     logger.info("Initializing API clients...")
@@ -260,8 +255,8 @@ def main(
     reports_generated = []
     csvs_generated = []
 
-    max_workers = min(DEFAULT_MAX_WORKERS, len(cfg["team"]))
-    logger.info("Processing %d team members with %d workers...", len(cfg["team"]), max_workers)
+    max_workers = min(DEFAULT_MAX_WORKERS, len(cfg.team))
+    logger.info("Processing %d team members with %d workers...", len(cfg.team), max_workers)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -275,8 +270,8 @@ def main(
                 github_org,
                 ai_summary,
                 output,
-            ): member["name"]
-            for member in cfg["team"]
+            ): member.name
+            for member in cfg.team
         }
 
         for future in as_completed(futures):
