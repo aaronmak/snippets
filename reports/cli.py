@@ -184,6 +184,11 @@ def load_config(config_path: str) -> Config:
     default=None,
     help=f"Jira custom field ID for story points (default: {DEFAULT_STORY_POINTS_FIELD})",
 )
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Validate config and show what would be done without making API calls",
+)
 def main(
     config: Optional[str],
     start: Optional[str],
@@ -194,6 +199,7 @@ def main(
     ai_summary: bool,
     verbose: bool,
     story_points_field: Optional[str],
+    dry_run: bool,
 ):
     """Generate activity reports for team members across Jira and GitHub."""
     # Set up logging
@@ -238,6 +244,23 @@ def main(
     # Load configuration
     logger.info("Loading configuration from %s...", config)
     cfg = load_config(config)
+
+    # Handle dry-run mode
+    if dry_run:
+        logger.info("=== DRY RUN MODE ===")
+        logger.info("Configuration validated successfully.")
+        logger.info("Date range: %s to %s", start, end)
+        logger.info("Output directory: %s", output)
+        logger.info("Story points field: %s", story_points_field or cfg.story_points_field)
+        logger.info("GitHub org filter: %s", github_org or "none")
+        logger.info("AI summaries: %s", "enabled" if ai_summary else "disabled")
+        logger.info("Team members to process:")
+        for member in cfg.team:
+            jira_info = f"Jira: {member.jira_username}" if member.jira_username else "Jira: not configured"
+            github_info = f"GitHub: {member.github_username}" if member.github_username else "GitHub: not configured"
+            logger.info("  - %s (%s, %s)", member.name, jira_info, github_info)
+        logger.info("Would generate %d report(s) in %s", len(cfg.team), output)
+        return
 
     # Validate GitHub token
     github_token = validate_github_token()
