@@ -1,11 +1,13 @@
 """AI-powered summary generation using Claude."""
 
-import sys
+import logging
 from datetime import datetime, timedelta
 
 import anthropic
 
 from models import PersonReport, MonthlySummary
+
+logger = logging.getLogger("activity_report")
 
 
 def get_months_in_range(start_date: str, end_date: str) -> list[tuple[str, str, str]]:
@@ -103,7 +105,7 @@ Write the summary in third person, using their name. Be specific about what was 
         )
         return message.content[0].text
     except Exception as e:
-        print(f"  Warning: Failed to generate AI summary: {e}", file=sys.stderr)
+        logger.warning("Failed to generate AI summary: %s", e)
         return f"Summary generation failed: {str(e)}"
 
 
@@ -116,7 +118,7 @@ def generate_all_monthly_summaries(
     summaries = []
 
     for month_key, month_display, _ in months:
-        print(f"    Generating summary for {month_display}...", file=sys.stderr)
+        logger.info("Generating summary for %s...", month_display)
 
         # Filter data for this month (based on completion date: resolved for JIRA, merged for PRs)
         jira_resolved = filter_items_by_month(

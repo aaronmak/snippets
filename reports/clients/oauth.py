@@ -1,8 +1,8 @@
 """OAuth 2.0 3LO authentication for Atlassian."""
 
 import json
+import logging
 import secrets
-import sys
 import time
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -11,6 +11,8 @@ from typing import Optional
 from urllib.parse import urlencode, parse_qs, urlparse
 
 import requests
+
+logger = logging.getLogger("activity_report")
 
 
 # Default token storage location
@@ -136,21 +138,21 @@ class AtlassianOAuth:
 
         # Open browser for authorization
         auth_url = self.get_authorization_url(state)
-        print(f"\nOpening browser for Atlassian authorization...", file=sys.stderr)
-        print(f"If the browser doesn't open, visit:\n{auth_url}\n", file=sys.stderr)
+        logger.info("Opening browser for Atlassian authorization...")
+        logger.info("If the browser doesn't open, visit:\n%s", auth_url)
         webbrowser.open(auth_url)
 
         # Wait for callback
-        print("Waiting for authorization (timeout: 2 minutes)...", file=sys.stderr)
+        logger.info("Waiting for authorization (timeout: 2 minutes)...")
         while server.auth_code is None and server.auth_error is None:
             server.handle_request()
 
         if server.auth_error:
-            print(f"Authorization failed: {server.auth_error}", file=sys.stderr)
+            logger.error("Authorization failed: %s", server.auth_error)
             return False
 
         if server.auth_state != state:
-            print("State mismatch - possible CSRF attack", file=sys.stderr)
+            logger.error("State mismatch - possible CSRF attack")
             return False
 
         # Exchange code for tokens
@@ -171,7 +173,7 @@ class AtlassianOAuth:
         )
 
         if resp.status_code != 200:
-            print(f"Token exchange failed: {resp.text}", file=sys.stderr)
+            logger.error("Token exchange failed: %s", resp.text)
             return False
 
         self.tokens = resp.json()
@@ -182,7 +184,7 @@ class AtlassianOAuth:
             return False
 
         self._save_tokens()
-        print("Authorization successful! Tokens saved.", file=sys.stderr)
+        logger.info("Authorization successful! Tokens saved.")
         return True
 
     def _fetch_cloud_id(self) -> bool:
@@ -193,19 +195,19 @@ class AtlassianOAuth:
         )
 
         if resp.status_code != 200:
-            print(f"Failed to fetch accessible resources: {resp.text}", file=sys.stderr)
+            logger.error("Failed to fetch accessible resources: %s", resp.text)
             return False
 
         resources = resp.json()
         if not resources:
-            print("No accessible Atlassian sites found.", file=sys.stderr)
+            logger.error("No accessible Atlassian sites found.")
             return False
 
         # Use the first site (or let user choose if multiple)
         if len(resources) > 1:
-            print("\nMultiple Atlassian sites found:", file=sys.stderr)
+            logger.info("Multiple Atlassian sites found:")
             for i, r in enumerate(resources):
-                print(f"  {i + 1}. {r['name']} ({r['url']})", file=sys.stderr)
+                logger.info("  %d. %s (%s)", i + 1, r['name'], r['url'])
             choice = input("Select site (1): ").strip() or "1"
             idx = int(choice) - 1
         else:
@@ -213,15 +215,13 @@ class AtlassianOAuth:
 
         self.cloud_id = resources[idx]["id"]
         self.site_url = resources[idx]["url"]
-        print(
-            f"Using site: {resources[idx]['name']} ({self.site_url})", file=sys.stderr
-        )
+        logger.info("Using site: %s (%s)", resources[idx]['name'], self.site_url)
         return True
 
     def refresh_token(self) -> bool:
         """Refresh the access token using the refresh token."""
         if "refresh_token" not in self.tokens:
-            print("No refresh token available. Please re-authorize.", file=sys.stderr)
+            logger.warning("No refresh token available. Please re-authorize.")
             return False
 
         resp = requests.post(
@@ -236,7 +236,7 @@ class AtlassianOAuth:
         )
 
         if resp.status_code != 200:
-            print(f"Token refresh failed: {resp.text}", file=sys.stderr)
+            logger.error("Token refresh failed: %s", resp.text)
             return False
 
         new_tokens = resp.json()

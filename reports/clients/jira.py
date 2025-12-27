@@ -1,6 +1,6 @@
 """Jira API client."""
 
-import sys
+import logging
 import time
 from datetime import datetime
 from typing import Optional
@@ -9,6 +9,8 @@ from urllib.parse import urljoin
 import requests
 
 from clients.oauth import AtlassianOAuth
+
+logger = logging.getLogger("activity_report")
 
 
 class AtlassianClient:
@@ -70,7 +72,7 @@ class AtlassianClient:
                     )
                 if resp.status_code == 429:  # Rate limited
                     retry_after = int(resp.headers.get("Retry-After", 60))
-                    print(f"  Rate limited, waiting {retry_after}s...", file=sys.stderr)
+                    logger.warning("Rate limited, waiting %ds...", retry_after)
                     time.sleep(retry_after)
                     continue
                 resp.raise_for_status()
@@ -78,9 +80,7 @@ class AtlassianClient:
             except requests.exceptions.RequestException as e:
                 if attempt == 2:
                     raise
-                print(
-                    f"  Request failed, retrying ({attempt + 1}/3)...", file=sys.stderr
-                )
+                logger.warning("Request failed, retrying (%d/3)...", attempt + 1)
                 time.sleep(2**attempt)
         return {}
 
@@ -108,10 +108,7 @@ class JiraClient(AtlassianClient):
                 self._account_id_cache[username] = account_id
                 return account_id
         except Exception as e:
-            print(
-                f"  Warning: Could not look up account ID for {username}: {e}",
-                file=sys.stderr,
-            )
+            logger.warning("Could not look up account ID for %s: %s", username, e)
 
         # Fall back to using the username as-is (might be an account ID already)
         return username

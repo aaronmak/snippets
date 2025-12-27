@@ -1,11 +1,13 @@
 """GitHub API client using GraphQL."""
 
-import sys
+import logging
 import time
 from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
+
+logger = logging.getLogger("activity_report")
 
 
 class GitHubClient:
@@ -89,9 +91,7 @@ class GitHubClient:
                         resp.headers.get("X-RateLimit-Reset", time.time() + 60)
                     )
                     wait_time = max(reset_time - time.time(), 0) + 1
-                    print(
-                        f"  Rate limited, waiting {int(wait_time)}s...", file=sys.stderr
-                    )
+                    logger.warning("Rate limited, waiting %ds...", int(wait_time))
                     time.sleep(wait_time)
                     continue
                 resp.raise_for_status()
@@ -99,10 +99,7 @@ class GitHubClient:
             except requests.exceptions.RequestException as e:
                 if attempt == 2:
                     raise
-                print(
-                    f"  GraphQL request failed, retrying ({attempt + 1}/3)...",
-                    file=sys.stderr,
-                )
+                logger.warning("GraphQL request failed, retrying (%d/3)...", attempt + 1)
                 time.sleep(2**attempt)
         return {}
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """CLI for the Activity Report Generator."""
 
+import logging
 import os
-import sys
 from datetime import datetime
 from typing import Optional
 
@@ -11,7 +11,10 @@ import yaml
 
 from clients import AtlassianOAuth, JiraClient, GitHubClient
 from generators import generate_report, export_to_csv, generate_all_monthly_summaries
+from logging_config import setup_logging
 from models import PersonReport
+
+logger = logging.getLogger("activity_report")
 
 
 def get_oauth_client() -> AtlassianOAuth:
@@ -84,6 +87,11 @@ def load_config(config_path: str) -> dict:
     is_flag=True,
     help="Generate AI-powered monthly summaries using Claude (requires ANTHROPIC_API_KEY)",
 )
+@click.option(
+    "--verbose", "-v",
+    is_flag=True,
+    help="Enable verbose logging output",
+)
 def main(
     config: Optional[str],
     start: Optional[str],
@@ -92,17 +100,20 @@ def main(
     github_org: Optional[str],
     auth: bool,
     ai_summary: bool,
+    verbose: bool,
 ):
     """Generate activity reports for team members across Jira and GitHub."""
+    # Set up logging
+    setup_logging(verbose=verbose)
 
     # Get OAuth client
     oauth = get_oauth_client()
 
     # Handle authorization flow
     if auth:
-        print("Starting Atlassian OAuth authorization flow...", file=sys.stderr)
+        logger.info("Starting Atlassian OAuth authorization flow...")
         if oauth.authorize():
-            print("\nAuthorization complete! You can now run reports.", file=sys.stderr)
+            logger.info("Authorization complete! You can now run reports.")
         else:
             raise click.ClickException("Authorization failed.")
         return
@@ -132,15 +143,15 @@ def main(
         raise click.ClickException("Start date must be before or equal to end date")
 
     # Load configuration
-    print(f"Loading configuration from {config}...", file=sys.stderr)
+    logger.info("Loading configuration from %s...", config)
     cfg = load_config(config)
 
     # Validate GitHub token
     github_token = validate_github_token()
 
     # Initialize clients
-    print("Initializing API clients...", file=sys.stderr)
-    print(f"Using Atlassian site: {oauth.site_url}", file=sys.stderr)
+    logger.info("Initializing API clients...")
+    logger.info("Using Atlassian site: %s", oauth.site_url)
     jira_client = JiraClient(oauth)
     github_client = GitHubClient(github_token)
 
@@ -153,7 +164,7 @@ def main(
         jira_user = member.get("jira_username", "")
         github_user = member.get("github_username", "")
 
-        print(f"\nProcessing {name}...", file=sys.stderr)
+        logger.info("Processing %s...", name)
 
         report = PersonReport(
             name=name,
@@ -163,7 +174,7 @@ def main(
         # Fetch Jira data
         if jira_user:
             try:
-                print(f"  Fetching Jira data for {jira_user}...", file=sys.stderr)
+                logger.info("Fetching Jira data for %s...", jira_user)
                 report.jira.issues_assigned = jira_client.get_issues_assigned(
                     jira_user, start, end
                 )
@@ -174,12 +185,12 @@ def main(
                     jira_user, start, end
                 )
             except Exception as e:
-                print(f"  Warning: Error fetching Jira data: {e}", file=sys.stderr)
+                logger.warning("Error fetching Jira data: %s", e)
 
         # Fetch GitHub data
         if github_user:
             try:
-                print(f"  Fetching GitHub data for {github_user}...", file=sys.stderr)
+                logger.info("Fetching GitHub data for %s...", github_user)
                 prs_opened, prs_merged, reviews = github_client.get_all_activity(
                     github_user, start, end, github_org
                 )
@@ -187,41 +198,41 @@ def main(
                 report.github.prs_merged = prs_merged
                 report.github.reviews = reviews
             except Exception as e:
-                print(f"  Warning: Error fetching GitHub data: {e}", file=sys.stderr)
+                logger.warning("Error fetching GitHub data: %s", e)
 
         # Generate AI summaries if requested
         if ai_summary:
             try:
-                print("  Generating AI summaries...", file=sys.stderr)
+                logger.info("Generating AI summaries...")
                 report.monthly_summaries = generate_all_monthly_summaries(report)
             except Exception as e:
-                print(f"  Warning: Error generating AI summaries: {e}", file=sys.stderr)
+                logger.warning("Error generating AI summaries: %s", e)
 
         # Export to CSV
         try:
             csv_files = export_to_csv(report, output)
             csvs_generated.extend(csv_files)
             for csv_file in csv_files:
-                print(f"  Exported: {csv_file}", file=sys.stderr)
+                logger.info("Exported: %s", csv_file)
         except Exception as e:
-            print(f"  Error exporting CSV: {e}", file=sys.stderr)
+            logger.error("Error exporting CSV: %s", e)
 
         # Generate report
         try:
             filepath = generate_report(report, output)
             reports_generated.append(filepath)
-            print(f"  Generated: {filepath}", file=sys.stderr)
+            logger.info("Generated: %s", filepath)
         except Exception as e:
-            print(f"  Error generating report: {e}", file=sys.stderr)
+            logger.error("Error generating report: %s", e)
 
     # Summary
-    print(f"\n{'=' * 50}", file=sys.stderr)
-    print(f"Generated {len(csvs_generated)} CSV file(s):", file=sys.stderr)
+    logger.info("=" * 50)
+    logger.info("Generated %d CSV file(s):", len(csvs_generated))
     for path in csvs_generated:
-        print(f"  - {path}", file=sys.stderr)
-    print(f"\nGenerated {len(reports_generated)} HTML report(s):", file=sys.stderr)
+        logger.info("  - %s", path)
+    logger.info("Generated %d HTML report(s):", len(reports_generated))
     for path in reports_generated:
-        print(f"  - {path}", file=sys.stderr)
+        logger.info("  - %s", path)
 
 
 if __name__ == "__main__":
