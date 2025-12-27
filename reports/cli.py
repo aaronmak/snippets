@@ -3,6 +3,7 @@
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
 
@@ -18,6 +19,90 @@ from logging_config import setup_logging
 from models import PersonReport
 
 logger = logging.getLogger("activity_report")
+
+# Default number of parallel workers
+DEFAULT_MAX_WORKERS = 4
+
+
+def process_team_member(
+    member: dict,
+    jira_client: JiraClient,
+    github_client: GitHubClient,
+    start: str,
+    end: str,
+    github_org: Optional[str],
+    ai_summary: bool,
+    output: str,
+) -> tuple[list[str], list[str]]:
+    """Process a single team member and return (csv_files, report_files)."""
+    name = member["name"]
+    jira_user = member.get("jira_username", "")
+    github_user = member.get("github_username", "")
+
+    logger.info("Processing %s...", name)
+
+    report = PersonReport(
+        name=name,
+        date_range=(start, end),
+    )
+
+    # Fetch Jira data
+    if jira_user:
+        try:
+            logger.info("Fetching Jira data for %s...", jira_user)
+            report.jira.issues_assigned = jira_client.get_issues_assigned(
+                jira_user, start, end
+            )
+            report.jira.issues_resolved = jira_client.get_issues_resolved(
+                jira_user, start, end
+            )
+            report.jira.comments_made = jira_client.get_comments_made(
+                jira_user, start, end
+            )
+        except requests.exceptions.RequestException as e:
+            logger.warning("Error fetching Jira data for %s: %s", name, e)
+
+    # Fetch GitHub data
+    if github_user:
+        try:
+            logger.info("Fetching GitHub data for %s...", github_user)
+            prs_opened, prs_merged, reviews = github_client.get_all_activity(
+                github_user, start, end, github_org
+            )
+            report.github.prs_opened = prs_opened
+            report.github.prs_merged = prs_merged
+            report.github.reviews = reviews
+        except requests.exceptions.RequestException as e:
+            logger.warning("Error fetching GitHub data for %s: %s", name, e)
+
+    # Generate AI summaries if requested
+    if ai_summary:
+        try:
+            logger.info("Generating AI summaries for %s...", name)
+            report.monthly_summaries = generate_all_monthly_summaries(report)
+        except (requests.exceptions.RequestException, KeyError, ValueError) as e:
+            logger.warning("Error generating AI summaries for %s: %s", name, e)
+
+    csv_files = []
+    report_files = []
+
+    # Export to CSV
+    try:
+        csv_files = export_to_csv(report, output)
+        for csv_file in csv_files:
+            logger.info("Exported: %s", csv_file)
+    except OSError as e:
+        logger.error("Error exporting CSV for %s: %s", name, e)
+
+    # Generate report
+    try:
+        filepath = generate_report(report, output)
+        report_files.append(filepath)
+        logger.info("Generated: %s", filepath)
+    except (OSError, jinja2.TemplateError) as e:
+        logger.error("Error generating report for %s: %s", name, e)
+
+    return csv_files, report_files
 
 
 def get_oauth_client() -> AtlassianOAuth:
@@ -171,75 +256,37 @@ def main(
     jira_client = JiraClient(oauth, story_points_field=sp_field)
     github_client = GitHubClient(github_token)
 
-    # Process each team member
+    # Process each team member in parallel
     reports_generated = []
     csvs_generated = []
 
-    for member in cfg["team"]:
-        name = member["name"]
-        jira_user = member.get("jira_username", "")
-        github_user = member.get("github_username", "")
+    max_workers = min(DEFAULT_MAX_WORKERS, len(cfg["team"]))
+    logger.info("Processing %d team members with %d workers...", len(cfg["team"]), max_workers)
 
-        logger.info("Processing %s...", name)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                process_team_member,
+                member,
+                jira_client,
+                github_client,
+                start,
+                end,
+                github_org,
+                ai_summary,
+                output,
+            ): member["name"]
+            for member in cfg["team"]
+        }
 
-        report = PersonReport(
-            name=name,
-            date_range=(start, end),
-        )
-
-        # Fetch Jira data
-        if jira_user:
+        for future in as_completed(futures):
+            member_name = futures[future]
             try:
-                logger.info("Fetching Jira data for %s...", jira_user)
-                report.jira.issues_assigned = jira_client.get_issues_assigned(
-                    jira_user, start, end
-                )
-                report.jira.issues_resolved = jira_client.get_issues_resolved(
-                    jira_user, start, end
-                )
-                report.jira.comments_made = jira_client.get_comments_made(
-                    jira_user, start, end
-                )
-            except requests.exceptions.RequestException as e:
-                logger.warning("Error fetching Jira data: %s", e)
-
-        # Fetch GitHub data
-        if github_user:
-            try:
-                logger.info("Fetching GitHub data for %s...", github_user)
-                prs_opened, prs_merged, reviews = github_client.get_all_activity(
-                    github_user, start, end, github_org
-                )
-                report.github.prs_opened = prs_opened
-                report.github.prs_merged = prs_merged
-                report.github.reviews = reviews
-            except requests.exceptions.RequestException as e:
-                logger.warning("Error fetching GitHub data: %s", e)
-
-        # Generate AI summaries if requested
-        if ai_summary:
-            try:
-                logger.info("Generating AI summaries...")
-                report.monthly_summaries = generate_all_monthly_summaries(report)
-            except (requests.exceptions.RequestException, KeyError, ValueError) as e:
-                logger.warning("Error generating AI summaries: %s", e)
-
-        # Export to CSV
-        try:
-            csv_files = export_to_csv(report, output)
-            csvs_generated.extend(csv_files)
-            for csv_file in csv_files:
-                logger.info("Exported: %s", csv_file)
-        except OSError as e:
-            logger.error("Error exporting CSV: %s", e)
-
-        # Generate report
-        try:
-            filepath = generate_report(report, output)
-            reports_generated.append(filepath)
-            logger.info("Generated: %s", filepath)
-        except (OSError, jinja2.TemplateError) as e:
-            logger.error("Error generating report: %s", e)
+                csv_files, report_files = future.result()
+                csvs_generated.extend(csv_files)
+                reports_generated.extend(report_files)
+            except Exception as e:
+                logger.error("Error processing %s: %s", member_name, e)
 
     # Summary
     logger.info("=" * 50)
