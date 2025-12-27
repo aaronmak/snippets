@@ -119,7 +119,7 @@ class JiraClient(AtlassianClient):
                 account_id = resp[0].get("accountId")
                 self._account_id_cache[username] = account_id
                 return account_id
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             logger.warning("Could not look up account ID for %s: %s", username, e)
 
         # Fall back to using the username as-is (might be an account ID already)
@@ -186,7 +186,7 @@ class JiraClient(AtlassianClient):
                 JIRA_CHANGELOG_ENDPOINT.format(issue_key=issue_key),
             )
             return {"histories": resp.get("values", [])}
-        except Exception:
+        except requests.exceptions.RequestException:
             return {"histories": []}
 
     def get_issues_assigned(
@@ -233,7 +233,7 @@ class JiraClient(AtlassianClient):
                 {"issue_key": i["key"], "issue_summary": i["fields"].get("summary", "")}
                 for i in issues
             ]
-        except Exception:
+        except requests.exceptions.RequestException:
             # issueFunction might not be available, return empty
             return []
 

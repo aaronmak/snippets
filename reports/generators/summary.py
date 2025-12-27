@@ -104,7 +104,7 @@ Write the summary in third person, using their name. Be specific about what was 
             ],
         )
         return message.content[0].text
-    except Exception as e:
+    except anthropic.APIError as e:
         logger.warning("Failed to generate AI summary: %s", e)
         return f"Summary generation failed: {str(e)}"
 

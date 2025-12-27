@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Optional
 
 import click
+import jinja2
+import requests
 import yaml
 
 from clients import AtlassianOAuth, JiraClient, GitHubClient
@@ -198,7 +200,7 @@ def main(
                 report.jira.comments_made = jira_client.get_comments_made(
                     jira_user, start, end
                 )
-            except Exception as e:
+            except requests.exceptions.RequestException as e:
                 logger.warning("Error fetching Jira data: %s", e)
 
         # Fetch GitHub data
@@ -211,7 +213,7 @@ def main(
                 report.github.prs_opened = prs_opened
                 report.github.prs_merged = prs_merged
                 report.github.reviews = reviews
-            except Exception as e:
+            except requests.exceptions.RequestException as e:
                 logger.warning("Error fetching GitHub data: %s", e)
 
         # Generate AI summaries if requested
@@ -219,7 +221,7 @@ def main(
             try:
                 logger.info("Generating AI summaries...")
                 report.monthly_summaries = generate_all_monthly_summaries(report)
-            except Exception as e:
+            except (requests.exceptions.RequestException, KeyError, ValueError) as e:
                 logger.warning("Error generating AI summaries: %s", e)
 
         # Export to CSV
@@ -228,7 +230,7 @@ def main(
             csvs_generated.extend(csv_files)
             for csv_file in csv_files:
                 logger.info("Exported: %s", csv_file)
-        except Exception as e:
+        except OSError as e:
             logger.error("Error exporting CSV: %s", e)
 
         # Generate report
@@ -236,7 +238,7 @@ def main(
             filepath = generate_report(report, output)
             reports_generated.append(filepath)
             logger.info("Generated: %s", filepath)
-        except Exception as e:
+        except (OSError, jinja2.TemplateError) as e:
             logger.error("Error generating report: %s", e)
 
     # Summary
