@@ -7,6 +7,8 @@ from typing import Optional
 
 import requests
 
+from constants import HTTP_FORBIDDEN, MAX_RETRIES, GITHUB_GRAPHQL_URL
+
 logger = logging.getLogger("activity_report")
 
 
@@ -73,11 +75,11 @@ class GitHubClient:
                 "Accept": "application/vnd.github.v3+json",
             }
         )
-        self.graphql_url = "https://api.github.com/graphql"
+        self.graphql_url = GITHUB_GRAPHQL_URL
 
     def _graphql(self, query: str, variables: Optional[dict] = None) -> dict:
         """Execute a GraphQL query."""
-        for attempt in range(3):
+        for attempt in range(MAX_RETRIES):
             try:
                 resp = self.session.post(
                     self.graphql_url,
@@ -86,7 +88,7 @@ class GitHubClient:
                         "variables": variables or {},
                     },
                 )
-                if resp.status_code == 403:  # Rate limited
+                if resp.status_code == HTTP_FORBIDDEN:  # Rate limited
                     reset_time = int(
                         resp.headers.get("X-RateLimit-Reset", time.time() + 60)
                     )
@@ -97,9 +99,9 @@ class GitHubClient:
                 resp.raise_for_status()
                 return resp.json()
             except requests.exceptions.RequestException as e:
-                if attempt == 2:
+                if attempt == MAX_RETRIES - 1:
                     raise
-                logger.warning("GraphQL request failed, retrying (%d/3)...", attempt + 1)
+                logger.warning("GraphQL request failed, retrying (%d/%d)...", attempt + 1, MAX_RETRIES)
                 time.sleep(2**attempt)
         return {}
 

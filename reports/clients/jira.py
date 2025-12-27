@@ -9,6 +9,17 @@ from urllib.parse import urljoin
 import requests
 
 from clients.oauth import AtlassianOAuth
+from constants import (
+    JiraStatus,
+    JiraIssueType,
+    DEFAULT_STORY_POINTS_FIELD,
+    JIRA_SEARCH_ENDPOINT,
+    JIRA_USER_SEARCH_ENDPOINT,
+    JIRA_CHANGELOG_ENDPOINT,
+    HTTP_UNAUTHORIZED,
+    HTTP_TOO_MANY_REQUESTS,
+    MAX_RETRIES,
+)
 
 logger = logging.getLogger("activity_report")
 
@@ -50,7 +61,7 @@ class AtlassianClient:
         """Make a request with retry logic and automatic token refresh."""
         url = self._get_api_url(endpoint)
 
-        for attempt in range(3):
+        for attempt in range(MAX_RETRIES):
             try:
                 # Get fresh access token
                 access_token = self.oauth.get_access_token()
@@ -62,15 +73,15 @@ class AtlassianClient:
                 self.session.headers["Authorization"] = f"Bearer {access_token}"
                 resp = self.session.request(method, url, **kwargs)
 
-                if resp.status_code == 401:
+                if resp.status_code == HTTP_UNAUTHORIZED:
                     # Try to refresh token
                     if self.oauth.refresh_token():
                         continue
                     raise requests.exceptions.HTTPError(
                         "Jira authentication failed (401 Unauthorized).\n"
-                        f"Please run with --auth to re-authorize."
+                        "Please run with --auth to re-authorize."
                     )
-                if resp.status_code == 429:  # Rate limited
+                if resp.status_code == HTTP_TOO_MANY_REQUESTS:
                     retry_after = int(resp.headers.get("Retry-After", 60))
                     logger.warning("Rate limited, waiting %ds...", retry_after)
                     time.sleep(retry_after)
@@ -78,9 +89,9 @@ class AtlassianClient:
                 resp.raise_for_status()
                 return resp.json() if resp.content else {}
             except requests.exceptions.RequestException as e:
-                if attempt == 2:
+                if attempt == MAX_RETRIES - 1:
                     raise
-                logger.warning("Request failed, retrying (%d/3)...", attempt + 1)
+                logger.warning("Request failed, retrying (%d/%d)...", attempt + 1, MAX_RETRIES)
                 time.sleep(2**attempt)
         return {}
 
@@ -102,7 +113,7 @@ class JiraClient(AtlassianClient):
 
         # Try searching for the user
         try:
-            resp = self.get("/rest/api/3/user/search", params={"query": username})
+            resp = self.get(JIRA_USER_SEARCH_ENDPOINT, params={"query": username})
             if resp and len(resp) > 0:
                 account_id = resp[0].get("accountId")
                 self._account_id_cache[username] = account_id
@@ -114,7 +125,8 @@ class JiraClient(AtlassianClient):
         return username
 
     def search_issues(
-        self, jql: str, fields: Optional[list[str]] = None, expand_changelog: bool = False
+        self, jql: str, fields: Optional[list[str]] = None, expand_changelog: bool = False,
+        story_points_field: str = DEFAULT_STORY_POINTS_FIELD
     ) -> list[dict]:
         """Search issues using JQL via the /rest/api/3/search/jql endpoint."""
         if fields is None:
@@ -127,7 +139,7 @@ class JiraClient(AtlassianClient):
                 "resolved",
                 "assignee",
                 "project",
-                "customfield_10053",  # Story points
+                story_points_field,
             ]
 
         all_issues = []
@@ -145,7 +157,7 @@ class JiraClient(AtlassianClient):
 
             resp = self._request(
                 "POST",
-                "/rest/api/3/search/jql",
+                JIRA_SEARCH_ENDPOINT,
                 json=params,
             )
             issues = resp.get("issues", [])
@@ -170,7 +182,7 @@ class JiraClient(AtlassianClient):
         try:
             resp = self._request(
                 "GET",
-                f"/rest/api/3/issue/{issue_key}/changelog",
+                JIRA_CHANGELOG_ENDPOINT.format(issue_key=issue_key),
             )
             return {"histories": resp.get("values", [])}
         except Exception:
@@ -181,7 +193,7 @@ class JiraClient(AtlassianClient):
     ) -> list[dict]:
         """Get issues created and assigned to user in date range."""
         account_id = self.get_account_id(username)
-        jql = f'assignee = "{account_id}" AND created >= "{start_date}" AND created <= "{end_date}" AND status NOT IN ("Cancelled", "Dismissed") AND issuetype != Epic'
+        jql = f'assignee = "{account_id}" AND created >= "{start_date}" AND created <= "{end_date}" AND status NOT IN ("{JiraStatus.CANCELLED}", "{JiraStatus.DISMISSED}") AND issuetype != {JiraIssueType.EPIC}'
         issues = self.search_issues(jql, expand_changelog=True)
         return [self._format_issue(i) for i in issues]
 
@@ -198,7 +210,7 @@ class JiraClient(AtlassianClient):
         # Fetch issues that were resolved in the date range
         # Add created date bound to satisfy JIRA's unbounded query restriction
         two_years_ago = self._get_two_years_ago()
-        jql = f'assignee = "{account_id}" AND resolved >= "{start_date}" AND resolved <= "{end_date}" AND created >= "{two_years_ago}" AND issuetype != Epic'
+        jql = f'assignee = "{account_id}" AND resolved >= "{start_date}" AND resolved <= "{end_date}" AND created >= "{two_years_ago}" AND issuetype != {JiraIssueType.EPIC}'
         issues = self.search_issues(jql, expand_changelog=True)
         return [self._format_issue(i) for i in issues]
 
@@ -262,7 +274,7 @@ class JiraClient(AtlassianClient):
             for item in history.get("items", []):
                 if item.get("field") == "status":
                     to_status = item.get("toString", "")
-                    if to_status in target_statuses:
+                    if to_status in [s.value if isinstance(s, JiraStatus) else s for s in target_statuses]:
                         # Return the date of this change
                         created = history.get("created", "")
                         return created[:10] if created else None
@@ -272,7 +284,7 @@ class JiraClient(AtlassianClient):
     def _format_issue(self, issue: dict) -> dict:
         """Format issue for display."""
         fields = issue.get("fields", {})
-        story_points = fields.get("customfield_10053")
+        story_points = fields.get(DEFAULT_STORY_POINTS_FIELD)
         description = self._extract_text_from_adf(fields.get("description"))
 
         # Get resolved date: prefer the resolved field, fall back to changelog
@@ -280,7 +292,7 @@ class JiraClient(AtlassianClient):
         if not resolved:
             # Try to get the date from changelog when status changed to Closed/Resolved/Done
             resolved = (
-                self._get_status_change_date(issue, ["Closed", "Resolved", "Done"])
+                self._get_status_change_date(issue, [JiraStatus.CLOSED, JiraStatus.RESOLVED, JiraStatus.DONE])
                 or ""
             )
 

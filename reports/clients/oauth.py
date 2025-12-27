@@ -12,16 +12,20 @@ from urllib.parse import urlencode, parse_qs, urlparse
 
 import requests
 
+from constants import (
+    ATLASSIAN_AUTH_URL,
+    ATLASSIAN_TOKEN_URL,
+    ATLASSIAN_RESOURCES_URL,
+    DEFAULT_OAUTH_PORT,
+    OAUTH_SUCCESS_HTML,
+    OAUTH_ERROR_HTML_TEMPLATE,
+)
+
 logger = logging.getLogger("activity_report")
 
 
 # Default token storage location
 TOKEN_FILE = Path.home() / ".atlassian_oauth_tokens.json"
-
-# OAuth endpoints
-ATLASSIAN_AUTH_URL = "https://auth.atlassian.com/authorize"
-ATLASSIAN_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
-ATLASSIAN_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -37,24 +41,14 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            self.wfile.write(b"""
-                <html><body style="font-family: sans-serif; text-align: center; padding: 50px;">
-                <h1>Authorization Successful!</h1>
-                <p>You can close this window and return to the terminal.</p>
-                </body></html>
-            """)
+            self.wfile.write(OAUTH_SUCCESS_HTML)
         elif "error" in query:
             self.server.auth_error = query.get("error_description", query["error"])[0]
             self.send_response(400)
             self.send_header("Content-type", "text/html")
             self.end_headers()
             self.wfile.write(
-                f"""
-                <html><body style="font-family: sans-serif; text-align: center; padding: 50px;">
-                <h1>Authorization Failed</h1>
-                <p>{self.server.auth_error}</p>
-                </body></html>
-            """.encode()
+                OAUTH_ERROR_HTML_TEMPLATE.format(error=self.server.auth_error).encode()
             )
         else:
             self.send_response(404)
@@ -72,7 +66,7 @@ class AtlassianOAuth:
         self,
         client_id: str,
         client_secret: str,
-        redirect_port: int = 8089,
+        redirect_port: int = DEFAULT_OAUTH_PORT,
         token_file: Path = TOKEN_FILE,
     ):
         self.client_id = client_id
