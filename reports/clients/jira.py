@@ -227,7 +227,7 @@ class JiraClient(AtlassianClient):
         # This is an approximation - Jira's comment search is limited
         try:
             # Use JQL to find issues the user participated in
-            jql = f'issueFunction in commented("by {account_id}") AND updated >= "{start_date}" AND updated <= "{end_date}"'
+            jql = f'issueFunction in commented("by {account_id}") AND updated >= "{start_date}" AND updated <= "{end_date}" AND issuetype != {JiraIssueType.EPIC}'
             issues = self.search_issues(jql, fields=["key", "summary"])
             return [
                 {"issue_key": i["key"], "issue_summary": i["fields"].get("summary", "")}
