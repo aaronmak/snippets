@@ -282,6 +282,27 @@ class JiraClient(AtlassianClient):
 
         return None
 
+    def get_all_activity(
+        self, username: str, start_date: str, end_date: str
+    ) -> tuple[list[dict], list[dict]]:
+        """Fetch all Jira activity (issues assigned and resolved).
+
+        Returns:
+            Tuple of (issues_assigned, issues_resolved)
+        """
+        issues_assigned = self.get_issues_assigned(username, start_date, end_date)
+        issues_resolved = self.get_issues_resolved(username, start_date, end_date)
+
+        if not issues_assigned and not issues_resolved:
+            logger.warning(
+                "No Jira data returned for user '%s' between %s and %s",
+                username,
+                start_date,
+                end_date,
+            )
+
+        return issues_assigned, issues_resolved
+
     def _format_issue(self, issue: dict, story_points_field: str = DEFAULT_STORY_POINTS_FIELD) -> dict:
         """Format issue for display."""
         fields = issue.get("fields", {})

@@ -53,11 +53,8 @@ def process_team_member(
     if jira_user:
         try:
             logger.info("Fetching Jira data for %s...", jira_user)
-            report.jira.issues_assigned = jira_client.get_issues_assigned(
-                jira_user, start, end
-            )
-            report.jira.issues_resolved = jira_client.get_issues_resolved(
-                jira_user, start, end
+            report.jira.issues_assigned, report.jira.issues_resolved = (
+                jira_client.get_all_activity(jira_user, start, end)
             )
             report.jira.comments_made = jira_client.get_comments_made(
                 jira_user, start, end
