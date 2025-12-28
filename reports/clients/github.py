@@ -285,4 +285,12 @@ class GitHubClient:
                     seen_reviews.add(url)
                     all_reviews.append(pr)
 
+        if not all_prs_opened and not all_prs_merged and not all_reviews:
+            logger.warning(
+                "No GitHub data returned for user '%s' between %s and %s",
+                username,
+                start_date,
+                end_date,
+            )
+
         return all_prs_opened, all_prs_merged, all_reviews
