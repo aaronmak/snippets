@@ -162,7 +162,7 @@ def load_config(config_path: str) -> Config:
 @click.option("--config", "-c", help="Path to config YAML file")
 @click.option("--start", "-s", help="Start date (YYYY-MM-DD)")
 @click.option("--end", "-e", help="End date (YYYY-MM-DD)")
-@click.option("--output", "-o", default="./reports", help="Output directory")
+@click.option("--output", "-o", default="output", help="Output directory")
 @click.option("--github-org", help="GitHub org to filter (optional)")
 @click.option(
     "--auth",
@@ -175,7 +175,8 @@ def load_config(config_path: str) -> Config:
     help="Generate AI-powered monthly summaries using Claude (requires ANTHROPIC_API_KEY)",
 )
 @click.option(
-    "--verbose", "-v",
+    "--verbose",
+    "-v",
     is_flag=True,
     help="Enable verbose logging output",
 )
@@ -251,13 +252,23 @@ def main(
         logger.info("Configuration validated successfully.")
         logger.info("Date range: %s to %s", start, end)
         logger.info("Output directory: %s", output)
-        logger.info("Story points field: %s", story_points_field or cfg.story_points_field)
+        logger.info(
+            "Story points field: %s", story_points_field or cfg.story_points_field
+        )
         logger.info("GitHub org filter: %s", github_org or "none")
         logger.info("AI summaries: %s", "enabled" if ai_summary else "disabled")
         logger.info("Team members to process:")
         for member in cfg.team:
-            jira_info = f"Jira: {member.jira_username}" if member.jira_username else "Jira: not configured"
-            github_info = f"GitHub: {member.github_username}" if member.github_username else "GitHub: not configured"
+            jira_info = (
+                f"Jira: {member.jira_username}"
+                if member.jira_username
+                else "Jira: not configured"
+            )
+            github_info = (
+                f"GitHub: {member.github_username}"
+                if member.github_username
+                else "GitHub: not configured"
+            )
             logger.info("  - %s (%s, %s)", member.name, jira_info, github_info)
         logger.info("Would generate %d report(s) in %s", len(cfg.team), output)
         return
@@ -279,7 +290,9 @@ def main(
     csvs_generated = []
 
     max_workers = min(DEFAULT_MAX_WORKERS, len(cfg.team))
-    logger.info("Processing %d team members with %d workers...", len(cfg.team), max_workers)
+    logger.info(
+        "Processing %d team members with %d workers...", len(cfg.team), max_workers
+    )
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
