@@ -1,9 +1,12 @@
 """Jira API client."""
 
+import json
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -21,6 +24,7 @@ from constants import (
     HTTP_TOO_MANY_REQUESTS,
     MAX_RETRIES,
     CHANGELOG_MAX_WORKERS,
+    JIRA_ACCOUNT_ID_CACHE_FILE,
 )
 
 logger = logging.getLogger("activity_report")
@@ -107,7 +111,28 @@ class JiraClient(AtlassianClient):
     def __init__(self, oauth: AtlassianOAuth, story_points_field: str = DEFAULT_STORY_POINTS_FIELD):
         super().__init__(oauth=oauth)
         self._account_id_cache: dict[str, str] = {}
+        self._cache_file = Path(os.path.expanduser(JIRA_ACCOUNT_ID_CACHE_FILE))
+        self._load_account_id_cache()
         self.story_points_field = story_points_field
+
+    def _load_account_id_cache(self) -> None:
+        """Load account ID cache from disk."""
+        if self._cache_file.exists():
+            try:
+                with open(self._cache_file, "r") as f:
+                    self._account_id_cache = json.load(f)
+                logger.debug("Loaded %d cached account IDs", len(self._account_id_cache))
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Could not load account ID cache: %s", e)
+                self._account_id_cache = {}
+
+    def _save_account_id_cache(self) -> None:
+        """Save account ID cache to disk."""
+        try:
+            with open(self._cache_file, "w") as f:
+                json.dump(self._account_id_cache, f, indent=2)
+        except OSError as e:
+            logger.warning("Could not save account ID cache: %s", e)
 
     def get_account_id(self, username: str) -> Optional[str]:
         """Look up account ID from username/email."""
@@ -120,6 +145,7 @@ class JiraClient(AtlassianClient):
             if resp and len(resp) > 0:
                 account_id = resp[0].get("accountId")
                 self._account_id_cache[username] = account_id
+                self._save_account_id_cache()
                 return account_id
         except requests.exceptions.RequestException as e:
             logger.warning("Could not look up account ID for %s: %s", username, e)

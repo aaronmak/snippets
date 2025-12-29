@@ -49,6 +49,9 @@ DEFAULT_RATE_LIMIT_WAIT = 60
 CHANGELOG_MAX_WORKERS = 10
 SUMMARY_MAX_WORKERS = 4
 
+# Cache configuration
+JIRA_ACCOUNT_ID_CACHE_FILE = "~/.jira_account_id_cache.json"
+
 # OAuth HTML templates
 OAUTH_SUCCESS_HTML = b"""
 <html><body style="font-family: sans-serif; text-align: center; padding: 50px;">
