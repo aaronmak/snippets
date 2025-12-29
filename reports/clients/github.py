@@ -2,12 +2,16 @@
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
 
 from constants import HTTP_FORBIDDEN, MAX_RETRIES, GITHUB_GRAPHQL_URL
+
+# Max workers for parallel monthly chunk fetching
+GITHUB_MONTHLY_CHUNK_WORKERS = 4
 
 logger = logging.getLogger("activity_report")
 
@@ -243,13 +247,42 @@ class GitHubClient:
         """Fetch all GitHub activity (PRs opened, merged, reviews) chunked by month.
 
         Splits the date range into monthly chunks to avoid GitHub's 1000 result limit
-        per search query.
+        per search query. Fetches chunks in parallel for improved performance.
 
         Returns:
             Tuple of (prs_opened, prs_merged, reviews)
         """
         monthly_ranges = self._get_monthly_ranges(start_date, end_date)
 
+        if not monthly_ranges:
+            return [], [], []
+
+        # Fetch all chunks in parallel
+        chunk_results: list[tuple[list[dict], list[dict], list[dict]]] = []
+        max_workers = min(GITHUB_MONTHLY_CHUNK_WORKERS, len(monthly_ranges))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all chunk fetch tasks
+            future_to_range = {
+                executor.submit(
+                    self._fetch_activity_chunk, username, chunk_start, chunk_end, org
+                ): (chunk_start, chunk_end)
+                for chunk_start, chunk_end in monthly_ranges
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_range):
+                date_range = future_to_range[future]
+                try:
+                    result = future.result()
+                    chunk_results.append(result)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to fetch GitHub activity for %s to %s: %s",
+                        date_range[0], date_range[1], e
+                    )
+
+        # Merge and deduplicate results
         all_prs_opened = []
         all_prs_merged = []
         all_reviews = []
@@ -259,11 +292,7 @@ class GitHubClient:
         seen_merged = set()
         seen_reviews = set()
 
-        for chunk_start, chunk_end in monthly_ranges:
-            prs_opened, prs_merged, reviews = self._fetch_activity_chunk(
-                username, chunk_start, chunk_end, org
-            )
-
+        for prs_opened, prs_merged, reviews in chunk_results:
             # Deduplicate PRs opened
             for pr in prs_opened:
                 url = pr.get("url")
