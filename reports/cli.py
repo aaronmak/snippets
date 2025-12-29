@@ -27,6 +27,22 @@ logger = logging.getLogger("activity_report")
 DEFAULT_MAX_WORKERS = 4
 
 
+def _fetch_jira_data(
+    jira_client: JiraClient, jira_user: str, start: str, end: str
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Fetch all Jira data for a user."""
+    issues_assigned, issues_resolved = jira_client.get_all_activity(jira_user, start, end)
+    comments_made = jira_client.get_comments_made(jira_user, start, end)
+    return issues_assigned, issues_resolved, comments_made
+
+
+def _fetch_github_data(
+    github_client: GitHubClient, github_user: str, start: str, end: str, github_org: Optional[str]
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Fetch all GitHub data for a user."""
+    return github_client.get_all_activity(github_user, start, end, github_org)
+
+
 def process_team_member(
     member: TeamMember,
     jira_client: JiraClient,
@@ -49,31 +65,42 @@ def process_team_member(
         date_range=(start, end),
     )
 
-    # Fetch Jira data
-    if jira_user:
-        try:
-            logger.info("Fetching Jira data for %s...", jira_user)
-            report.jira.issues_assigned, report.jira.issues_resolved = (
-                jira_client.get_all_activity(jira_user, start, end)
-            )
-            report.jira.comments_made = jira_client.get_comments_made(
-                jira_user, start, end
-            )
-        except requests.exceptions.RequestException as e:
-            logger.warning("Error fetching Jira data for %s: %s", name, e)
+    # Fetch Jira and GitHub data in parallel
+    jira_future = None
+    github_future = None
 
-    # Fetch GitHub data
-    if github_user:
-        try:
-            logger.info("Fetching GitHub data for %s...", github_user)
-            prs_opened, prs_merged, reviews = github_client.get_all_activity(
-                github_user, start, end, github_org
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        if jira_user:
+            logger.info("Fetching Jira data for %s...", jira_user)
+            jira_future = executor.submit(
+                _fetch_jira_data, jira_client, jira_user, start, end
             )
-            report.github.prs_opened = prs_opened
-            report.github.prs_merged = prs_merged
-            report.github.reviews = reviews
-        except requests.exceptions.RequestException as e:
-            logger.warning("Error fetching GitHub data for %s: %s", name, e)
+
+        if github_user:
+            logger.info("Fetching GitHub data for %s...", github_user)
+            github_future = executor.submit(
+                _fetch_github_data, github_client, github_user, start, end, github_org
+            )
+
+        # Collect Jira results
+        if jira_future:
+            try:
+                issues_assigned, issues_resolved, comments_made = jira_future.result()
+                report.jira.issues_assigned = issues_assigned
+                report.jira.issues_resolved = issues_resolved
+                report.jira.comments_made = comments_made
+            except requests.exceptions.RequestException as e:
+                logger.warning("Error fetching Jira data for %s: %s", name, e)
+
+        # Collect GitHub results
+        if github_future:
+            try:
+                prs_opened, prs_merged, reviews = github_future.result()
+                report.github.prs_opened = prs_opened
+                report.github.prs_merged = prs_merged
+                report.github.reviews = reviews
+            except requests.exceptions.RequestException as e:
+                logger.warning("Error fetching GitHub data for %s: %s", name, e)
 
     # Generate AI summaries if requested
     if ai_summary:
