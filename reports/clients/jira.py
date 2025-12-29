@@ -245,7 +245,7 @@ class JiraClient(AtlassianClient):
     ) -> list[dict]:
         """Get issues created and assigned to user in date range."""
         account_id = self.get_account_id(username)
-        jql = f'assignee = "{account_id}" AND created >= "{start_date}" AND created <= "{end_date}" AND status NOT IN ("{JiraStatus.CANCELLED}", "{JiraStatus.DISMISSED}") AND issuetype != {JiraIssueType.EPIC}'
+        jql = f'assignee = "{account_id}" AND created >= "{start_date}" AND created <= "{end_date}" AND status NOT IN ("{JiraStatus.CANCELLED.value}", "{JiraStatus.DISMISSED.value}") AND issuetype != "{JiraIssueType.EPIC.value}"'
         issues = self.search_issues(jql, expand_changelog=True, story_points_field=self.story_points_field)
         return [self._format_issue(i, self.story_points_field) for i in issues]
 
@@ -262,7 +262,7 @@ class JiraClient(AtlassianClient):
         # Fetch issues that were resolved in the date range
         # Add created date bound to satisfy JIRA's unbounded query restriction
         two_years_ago = self._get_two_years_ago()
-        jql = f'assignee = "{account_id}" AND resolved >= "{start_date}" AND resolved <= "{end_date}" AND created >= "{two_years_ago}" AND issuetype != {JiraIssueType.EPIC}'
+        jql = f'assignee = "{account_id}" AND resolved >= "{start_date}" AND resolved <= "{end_date}" AND created >= "{two_years_ago}" AND issuetype != "{JiraIssueType.EPIC.value}"'
         issues = self.search_issues(jql, expand_changelog=True, story_points_field=self.story_points_field)
         return [self._format_issue(i, self.story_points_field) for i in issues]
 
@@ -278,7 +278,7 @@ class JiraClient(AtlassianClient):
         # This is an approximation - Jira's comment search is limited
         try:
             # Use JQL to find issues the user participated in
-            jql = f'issueFunction in commented("by {account_id}") AND updated >= "{start_date}" AND updated <= "{end_date}" AND issuetype != {JiraIssueType.EPIC}'
+            jql = f'issueFunction in commented("by {account_id}") AND updated >= "{start_date}" AND updated <= "{end_date}" AND issuetype != "{JiraIssueType.EPIC.value}"'
             issues = self.search_issues(jql, fields=["key", "summary"])
             return [
                 {"issue_key": i["key"], "issue_summary": i["fields"].get("summary", "")}
