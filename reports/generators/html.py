@@ -124,7 +124,7 @@ def generate_report(report: PersonReport, output_dir: str) -> str:
         report.github.prs_merged, "merged_at", start_date, end_date
     )
     reviews_by_week = aggregate_by_week(
-        report.github.reviews, "created_at", start_date, end_date
+        report.github.reviews, "updated_at", start_date, end_date
     )
 
     # JIRA weekly data (tickets closed and story points)

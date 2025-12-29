@@ -62,6 +62,7 @@ class GitHubClient:
             url
             createdAt
             mergedAt
+            updatedAt
             repository { nameWithOwner }
           }
         }
@@ -116,6 +117,7 @@ class GitHubClient:
         repo = node.get("repository", {})
         created_at = node.get("createdAt", "")
         merged_at = node.get("mergedAt", "")
+        updated_at = node.get("updatedAt", "")
         return {
             "number": node.get("number"),
             "title": node.get("title", ""),
@@ -124,6 +126,7 @@ class GitHubClient:
             "repo": repo.get("nameWithOwner", ""),
             "created_at": created_at[:10] if created_at else "",
             "merged_at": merged_at[:10] if merged_at else "",
+            "updated_at": updated_at[:10] if updated_at else "",
             "url": node.get("url", ""),
         }
 

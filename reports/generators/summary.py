@@ -125,7 +125,7 @@ def _generate_summary_for_month(
     # Filter data for this month
     jira_resolved = filter_items_by_month(jira_issues_resolved, "resolved", month_key)
     prs_merged = filter_items_by_month(github_prs_merged, "merged_at", month_key)
-    reviews = filter_items_by_month(github_reviews, "created_at", month_key)
+    reviews = filter_items_by_month(github_reviews, "updated_at", month_key)
 
     summary_text = generate_monthly_summary(
         name,

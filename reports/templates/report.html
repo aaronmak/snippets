@@ -458,11 +458,11 @@
                 </thead>
                 <tbody>
                     {% for pr in github.reviews %}
-                    <tr data-date="{{ pr.created_at }}">
+                    <tr data-date="{{ pr.updated_at }}">
                         <td><a href="{{ pr.url }}" target="_blank">#{{ pr.number }}</a></td>
                         <td>{{ pr.title[:60] }}{% if pr.title|length > 60 %}...{% endif %}</td>
                         <td>{{ pr.repo }}</td>
-                        <td>{{ pr.created_at }}</td>
+                        <td>{{ pr.updated_at }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -730,7 +730,7 @@
             // Filter data for charts
             const filteredPrsOpened = reportData.github.prs_opened.filter(pr => isDateInRange(pr.created_at, startDate, endDate));
             const filteredPrsMerged = reportData.github.prs_merged.filter(pr => isDateInRange(pr.merged_at || pr.created_at, startDate, endDate));
-            const filteredReviews = reportData.github.reviews.filter(pr => isDateInRange(pr.created_at, startDate, endDate));
+            const filteredReviews = reportData.github.reviews.filter(pr => isDateInRange(pr.updated_at, startDate, endDate));
 
             // Update summary card metrics
             document.getElementById('metricPrsMerged').textContent = filteredPrsMerged.length;
@@ -741,7 +741,7 @@
             githubChart.data.labels = newLabels;
             githubChart.data.datasets[0].data = aggregateByWeek(filteredPrsOpened, 'created_at', startDate, endDate);
             githubChart.data.datasets[1].data = aggregateByWeek(filteredPrsMerged, 'merged_at', startDate, endDate);
-            githubChart.data.datasets[2].data = aggregateByWeek(filteredReviews, 'created_at', startDate, endDate);
+            githubChart.data.datasets[2].data = aggregateByWeek(filteredReviews, 'updated_at', startDate, endDate);
             githubChart.update();
 
             // Update JIRA chart
