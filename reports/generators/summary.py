@@ -1,10 +1,12 @@
 """AI-powered summary generation using Claude."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import anthropic
 
+from constants import SUMMARY_MAX_WORKERS
 from models import PersonReport, MonthlySummary
 
 logger = logging.getLogger("activity_report")
@@ -109,40 +111,82 @@ Write the summary in third person, using their name. Be specific about what was 
         return f"Summary generation failed: {str(e)}"
 
 
+def _generate_summary_for_month(
+    name: str,
+    month_key: str,
+    month_display: str,
+    jira_issues_resolved: list[dict],
+    github_prs_merged: list[dict],
+    github_reviews: list[dict],
+) -> MonthlySummary:
+    """Generate a summary for a single month (used for parallel execution)."""
+    logger.info("Generating summary for %s...", month_display)
+
+    # Filter data for this month
+    jira_resolved = filter_items_by_month(jira_issues_resolved, "resolved", month_key)
+    prs_merged = filter_items_by_month(github_prs_merged, "merged_at", month_key)
+    reviews = filter_items_by_month(github_reviews, "created_at", month_key)
+
+    summary_text = generate_monthly_summary(
+        name,
+        month_display,
+        jira_resolved,
+        prs_merged,
+        reviews,
+    )
+
+    return MonthlySummary(
+        month=month_key,
+        month_display=month_display,
+        summary=summary_text,
+    )
+
+
 def generate_all_monthly_summaries(
     report: PersonReport,
 ) -> list[MonthlySummary]:
-    """Generate summaries for each month in the report date range."""
+    """Generate summaries for each month in the report date range (in parallel)."""
     start_date, end_date = report.date_range
     months = get_months_in_range(start_date, end_date)
-    summaries = []
 
-    for month_key, month_display, _ in months:
-        logger.info("Generating summary for %s...", month_display)
+    if not months:
+        return []
 
-        # Filter data for this month (based on completion date: resolved for JIRA, merged for PRs)
-        jira_resolved = filter_items_by_month(
-            report.jira.issues_resolved, "resolved", month_key
-        )
-        prs_merged = filter_items_by_month(
-            report.github.prs_merged, "merged_at", month_key
-        )
-        reviews = filter_items_by_month(report.github.reviews, "created_at", month_key)
+    max_workers = min(SUMMARY_MAX_WORKERS, len(months))
+    summaries_dict: dict[str, MonthlySummary] = {}
 
-        summary_text = generate_monthly_summary(
-            report.name,
-            month_display,
-            jira_resolved,
-            prs_merged,
-            reviews,
-        )
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all summary generation tasks
+        future_to_month = {
+            executor.submit(
+                _generate_summary_for_month,
+                report.name,
+                month_key,
+                month_display,
+                report.jira.issues_resolved,
+                report.github.prs_merged,
+                report.github.reviews,
+            ): month_key
+            for month_key, month_display, _ in months
+        }
 
-        summaries.append(
-            MonthlySummary(
-                month=month_key,
-                month_display=month_display,
-                summary=summary_text,
-            )
-        )
+        # Collect results as they complete
+        for future in as_completed(future_to_month):
+            month_key = future_to_month[future]
+            try:
+                summary = future.result()
+                summaries_dict[month_key] = summary
+            except Exception as e:
+                logger.warning("Failed to generate summary for %s: %s", month_key, e)
+                # Create a fallback summary
+                month_display = next(
+                    (m[1] for m in months if m[0] == month_key), month_key
+                )
+                summaries_dict[month_key] = MonthlySummary(
+                    month=month_key,
+                    month_display=month_display,
+                    summary=f"Summary generation failed: {str(e)}",
+                )
 
-    return summaries
+    # Return summaries in chronological order
+    return [summaries_dict[month_key] for month_key, _, _ in months if month_key in summaries_dict]
