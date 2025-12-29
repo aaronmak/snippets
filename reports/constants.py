@@ -45,6 +45,10 @@ HTTP_TOO_MANY_REQUESTS = 429
 MAX_RETRIES = 3
 DEFAULT_RATE_LIMIT_WAIT = 60
 
+# Parallel request configuration
+CHANGELOG_MAX_WORKERS = 10
+SUMMARY_MAX_WORKERS = 4
+
 # OAuth HTML templates
 OAUTH_SUCCESS_HTML = b"""
 <html><body style="font-family: sans-serif; text-align: center; padding: 50px;">

@@ -2,6 +2,7 @@
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urljoin
@@ -19,6 +20,7 @@ from constants import (
     HTTP_UNAUTHORIZED,
     HTTP_TOO_MANY_REQUESTS,
     MAX_RETRIES,
+    CHANGELOG_MAX_WORKERS,
 )
 
 logger = logging.getLogger("activity_report")
@@ -168,15 +170,38 @@ class JiraClient(AtlassianClient):
             if not next_page_token:
                 break
 
-        # Fetch changelog for each issue if requested
-        if expand_changelog:
-            for issue in all_issues:
-                issue_key = issue.get("key")
-                if issue_key:
-                    changelog = self._get_issue_changelog(issue_key)
-                    issue["changelog"] = changelog
+        # Fetch changelog for each issue if requested (in parallel)
+        if expand_changelog and all_issues:
+            self._fetch_changelogs_parallel(all_issues)
 
         return all_issues
+
+    def _fetch_changelogs_parallel(self, issues: list[dict]) -> None:
+        """Fetch changelogs for all issues in parallel."""
+        issue_keys = [issue.get("key") for issue in issues if issue.get("key")]
+        if not issue_keys:
+            return
+
+        # Create a mapping of issue_key -> issue for fast lookup
+        issue_map = {issue.get("key"): issue for issue in issues if issue.get("key")}
+
+        max_workers = min(CHANGELOG_MAX_WORKERS, len(issue_keys))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all changelog fetch tasks
+            future_to_key = {
+                executor.submit(self._get_issue_changelog, key): key
+                for key in issue_keys
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_key):
+                issue_key = future_to_key[future]
+                try:
+                    changelog = future.result()
+                    issue_map[issue_key]["changelog"] = changelog
+                except Exception as e:
+                    logger.warning("Failed to fetch changelog for %s: %s", issue_key, e)
+                    issue_map[issue_key]["changelog"] = {"histories": []}
 
     def _get_issue_changelog(self, issue_key: str) -> dict:
         """Fetch changelog for a specific issue."""
