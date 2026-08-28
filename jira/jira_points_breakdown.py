@@ -3,60 +3,72 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "jira",
-#     "python-dotenv",
 # ]
 # ///
 """
 JIRA Story Points Breakdown
 ============================
-Fetches tickets from the last N days, groups by parent summary,
+Fetches tickets resolved in a date range, groups by parent summary,
 and prints % of story points per parent.
-
-Environment variables (set in .env or export):
-    JIRA_BASE_URL      - e.g. https://yourcompany.atlassian.net
-    JIRA_EMAIL         - your Atlassian email
-    JIRA_API_TOKEN     - API token from https://id.atlassian.com/manage-profile/security/api-tokens
-    JIRA_PROJECT_KEY   - project key (default: PDO)
-    LOOKBACK_DAYS      - number of days to look back (default: 14)
-    STORY_POINTS_FIELD - custom field ID for story points (default: customfield_10053)
 """
 
-import os
+import argparse
 from collections import defaultdict
+from datetime import date, timedelta
 
-from dotenv import load_dotenv
 from jira import JIRA
 
-load_dotenv(override=True)
 
-JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "").rstrip("/")
-JIRA_EMAIL = os.getenv("JIRA_EMAIL", "")
-JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "")
-PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "PDO")
-LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "14"))
-STORY_POINTS_FIELD = os.getenv("STORY_POINTS_FIELD", "customfield_10053")
+def parse_args():
+    parser = argparse.ArgumentParser(description="JIRA Story Points Breakdown")
+    parser.add_argument("--base-url", required=True, help="e.g. https://yourcompany.atlassian.net")
+    parser.add_argument("--email", required=True, help="Your Atlassian email")
+    parser.add_argument(
+        "--api-token",
+        required=True,
+        help="API token from https://id.atlassian.com/manage-profile/security/api-tokens",
+    )
+    parser.add_argument("--project-key", default="PDO", help="Project key (default: PDO)")
+    parser.add_argument("--start-date", help="Start date (YYYY-MM-DD), default: 30 days before end date")
+    parser.add_argument("--end-date", help="End date (YYYY-MM-DD), default: today")
+    parser.add_argument(
+        "--story-points-field",
+        default="customfield_10053",
+        help="Custom field ID for story points (default: customfield_10053)",
+    )
+    args = parser.parse_args()
+
+    end_date = date.fromisoformat(args.end_date) if args.end_date else date.today()
+    start_date = date.fromisoformat(args.start_date) if args.start_date else end_date - timedelta(days=30)
+    args.start_date = start_date
+    args.end_date = end_date
+    return args
 
 
 def main():
-    print(f"JIRA Base URL: {JIRA_BASE_URL}")
-    print(f"JIRA Email: {JIRA_EMAIL}\n\n")
-    client = JIRA(server=JIRA_BASE_URL, basic_auth=(JIRA_EMAIL, JIRA_API_TOKEN))
+    args = parse_args()
+    base_url = args.base_url.rstrip("/")
 
-    print(f"📊 JIRA Story Points Breakdown — Project: {PROJECT_KEY}")
-    print(f"   Period: last {LOOKBACK_DAYS} days")
+    print(f"JIRA Base URL: {base_url}")
+    print(f"JIRA Email: {args.email}\n\n")
+    client = JIRA(server=base_url, basic_auth=(args.email, args.api_token))
+
+    print(f"📊 JIRA Story Points Breakdown — Project: {args.project_key}")
+    print(f"   Period: {args.start_date} to {args.end_date}")
     print("=" * 60)
 
     jql = (
-        f"project = {PROJECT_KEY} "
+        f"project = {args.project_key} "
         f"AND issuetype not in (Epic, Sub-task) "
-        f"AND resolutiondate >= -{LOOKBACK_DAYS}d "
+        f'AND resolutiondate >= "{args.start_date}" '
+        f'AND resolutiondate <= "{args.end_date}" '
         f'AND status != "Dismissed"'
     )
 
     print("\n🔍 Fetching issues...")
     issues = client.search_issues(
         jql,
-        fields=f"summary,{STORY_POINTS_FIELD},parent",
+        fields=f"summary,{args.story_points_field},parent",
         maxResults=False,
     )
     print(f"   Found {len(issues)} issues")
@@ -66,7 +78,7 @@ def main():
     total_points = 0.0
 
     for issue in issues:
-        sp = getattr(issue.fields, STORY_POINTS_FIELD, None)
+        sp = getattr(issue.fields, args.story_points_field, None)
         if not sp:
             continue
         sp = float(sp)
